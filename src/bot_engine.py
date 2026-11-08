@@ -414,12 +414,12 @@ class AutonomousTradingBot:
             has_bearish_reversal = snap is not None and (
                 snap.candle_pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING") or not snap.above_ema_200
             )
-            if is_stoch_overbought and has_bearish_reversal and pnl_pct > 0:
+            if is_stoch_overbought and has_bearish_reversal:
                 reason = (
-                    f"CIERRE EN GANANCIA POR ESTOCASTICO >= {self.config.stoch_overbought:.0f} + RECHAZO "
+                    f"CIERRE POR ESTOCASTICO >= {self.config.stoch_overbought:.0f} + RECHAZO BAJISTA "
                     f"(%K={snap.stoch_k if snap else 0}, Patron={snap.candle_pattern if snap else 'NONE'}, PnL {pnl_pct:+.2f}%)"
                 )
-                logger.info("Cobrando ganancias en %s: %s", sym, reason)
+                logger.info("Cerrando posicion en %s: %s", sym, reason)
                 trade = self._execute_sell(state, sym, cur_price, reason=reason)
                 if trade:
                     actions.append(trade)

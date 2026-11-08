@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
 import tempfile
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.binance_client import SymbolFilters
 from src.bot_engine import AutonomousTradingBot, calculate_position_size_1pct_risk
