@@ -12,8 +12,51 @@ from src.state_manager import BotState, PositionState, StateManager, utc_now_iso
 logger = logging.getLogger(__name__)
 
 
+def calculate_position_size_1pct_risk(
+    total_equity_usdt: float,
+    available_usdt: float,
+    entry_price: float,
+    stop_loss_price: float,
+    risk_pct: float = 0.01,
+    min_risk_usd: float = 1.0,
+    max_position_pct: float = 0.35,
+) -> tuple[float, float]:
+    """
+    Calcula el tamano de posicion para arriesgar exactamente el 1% del capital total (minimo $1 USD)
+    en funcion de la distancia entre el precio de entrada y el Stop-Loss (bajo/alto de la vela anterior).
+    Retorna (monto_orden_usdt, riesgo_monetario_usd).
+    """
+    risk_usd = max(min_risk_usd, total_equity_usdt * risk_pct)
+    if entry_price <= 0:
+        return 0.0, risk_usd
+
+    sl_distance_pct = abs(entry_price - stop_loss_price) / entry_price
+    # Si el bajo de la vela anterior esta demasiado pegado (<0.25%), usamos 0.25% minimo para evitar sobredimensionar
+    effective_sl_pct = max(sl_distance_pct, 0.0025)
+
+    # Nocional ideal para que una caida de effective_sl_pct equivalga a perder `risk_usd`
+    ideal_notional_usdt = risk_usd / effective_sl_pct
+
+    # Acotamos al capital maximo permitido por posicion y a la liquidez disponible
+    max_allowed_usdt = min(available_usdt, max(total_equity_usdt * max_position_pct, min_risk_usd))
+    # Si la cuenta es pequena, garantizamos al menos el minimo de $1 USD o el disponible
+    final_usdt = min(ideal_notional_usdt, max_allowed_usdt)
+    if final_usdt < min_risk_usd and available_usdt >= min_risk_usd:
+        final_usdt = min_risk_usd
+
+    return round(final_usdt, 2), round(risk_usd, 2)
+
+
 class AutonomousTradingBot:
-    """Motor principal que coordina Binance Spot, Gestion de Riesgo Estricta y Gemini AI."""
+    """
+    Motor autonomo que ejecuta la estrategia:
+    - Temporalidad: 1 Hora (1h)
+    - Indicadores: EMA 200 + Estocastico (niveles 80 / 20)
+    - Gatillo: Vela Martillo o Vela Envolvente
+    - Stop-Loss: Ultimo bajo/alto de la vela anterior
+    - Salida: Cuando el Estocastico alcanza el extremo opuesto (80 en compra / 20 en venta)
+    - Riesgo: 1% del monto total (minimo $1 dolar)
+    """
 
     def __init__(
         self,
@@ -36,6 +79,12 @@ class AutonomousTradingBot:
             top_limit=config.top_candidates_limit,
             primary_interval=config.kline_interval_primary,
             htf_interval=config.kline_interval_htf,
+            ema_trend_period=config.ema_trend_period,
+            stoch_k_period=config.stoch_k_period,
+            stoch_smooth_k=config.stoch_smooth_k,
+            stoch_d_period=config.stoch_d_period,
+            stoch_overbought=config.stoch_overbought,
+            stoch_oversold=config.stoch_oversold,
         )
         self.ai_agent = ai_agent or GeminiTradingAgent(
             api_key=config.gemini_api_key,
@@ -48,12 +97,19 @@ class AutonomousTradingBot:
         )
 
     def run_cycle(self) -> dict[str, Any]:
-        """Ejecuta un ciclo completo de auditoria de riesgo, escaneo, IA y trading."""
+        """Ejecuta un ciclo completo de la estrategia EMA 200 + Estocastico (80/20) + Velas en 1H."""
         self.config.validate()
         state = self.state_manager.load_state()
         state.total_cycles += 1
 
-        logger.info("=== Iniciando Ciclo #%d (Modo: %s) ===", state.total_cycles, "DRY_RUN" if self.config.dry_run else "LIVE REAL")
+        logger.info(
+            "=== Iniciando Ciclo #%d | Estrategia EMA %d + Estocastico (%.0f/%.0f) en %s ===",
+            state.total_cycles,
+            self.config.ema_trend_period,
+            self.config.stoch_overbought,
+            self.config.stoch_oversold,
+            self.config.kline_interval_primary,
+        )
 
         # 1. Obtener precios globales y saldos reales de Binance
         all_prices = self.client.get_all_prices()
@@ -66,32 +122,24 @@ class AutonomousTradingBot:
         usdt_free, total_equity = self._reconcile_portfolio(state, balances, all_prices)
         daily_pnl_pct = self._update_daily_metrics(state, total_equity)
 
-        logger.info(
-            "Capital Total: %.2f %s | Liquidez Libre: %.2f %s | PnL Diario: %+.2f%% | Posiciones Abiertas: %d/%d",
-            total_equity,
-            self.config.quote_asset,
-            usdt_free,
-            self.config.quote_asset,
-            daily_pnl_pct,
-            len(state.positions),
-            self.config.max_open_positions,
-        )
+        # 3. Escanear el mercado en 1H (EMA 200, Estocastico y Patrones de Velas Martillo/Envolvente)
+        open_symbols = list(state.positions.keys())
+        snapshots = self.scanner.build_snapshots(must_include_symbols=open_symbols)
+        snapshots_map: dict[str, TechnicalSnapshot] = {s.symbol: s for s in snapshots}
+        for s in snapshots:
+            all_prices[s.symbol] = s.current_price
 
         executed_actions: list[dict[str, Any]] = []
 
-        # 3. Verificacion determinista de Stop-Loss, Take-Profit y Trailing Stop (antes de consultar a la IA)
-        risk_exits = self._enforce_hard_position_limits(state, all_prices)
+        # 4. Reglas Deterministas de Salida:
+        #    - Stop-Loss en el ultimo bajo de la vela anterior
+        #    - Cierre automatico cuando el Estocastico llega a >= 80 (sobrecompra)
+        risk_exits = self._enforce_strategy_exits(state, all_prices, snapshots_map)
         for exit_trade in risk_exits:
             executed_actions.append(exit_trade)
             usdt_free += float(exit_trade.get("quote_qty", 0.0))
 
-        # 4. Escanear los pares con mayor volumen/movimiento + posiciones actuales
-        open_symbols = list(state.positions.keys())
-        snapshots = self.scanner.build_snapshots(must_include_symbols=open_symbols)
-        snapshot_prices = {s.symbol: s.current_price for s in snapshots}
-        all_prices.update(snapshot_prices)
-
-        # 5. Consultar a Gemini AI para decisiones estrategicas
+        # 5. Consultar a Gemini AI sobre los candidatos y setups detectados
         recent_trades = self.state_manager.load_history()[-10:]
         ai_result = self.ai_agent.analyze_market(
             usdt_free=usdt_free,
@@ -107,7 +155,7 @@ class AutonomousTradingBot:
         )
         logger.info("Regimen IA: %s | %s", ai_result.market_regime, ai_result.summary)
 
-        # 6. Ejecutar primero las ventas (SELL) recomendadas por Gemini AI
+        # 6. Ejecutar ventas (SELL) recomendadas por Gemini AI en posiciones abiertas
         for dec in ai_result.decisions:
             if dec.action == "SELL" and dec.symbol in state.positions:
                 if dec.confidence >= self.config.min_ai_confidence:
@@ -115,13 +163,13 @@ class AutonomousTradingBot:
                         state=state,
                         symbol=dec.symbol,
                         current_price=all_prices.get(dec.symbol, state.positions[dec.symbol].entry_price),
-                        reason=f"IA SELL (Confianza {dec.confidence}%): {dec.reasoning}",
+                        reason=f"Cierre IA (Confianza {dec.confidence}%): {dec.reasoning}",
                     )
                     if trade:
                         executed_actions.append(trade)
                         usdt_free += float(trade.get("quote_qty", 0.0))
 
-        # 7. Verificar Cortacircuitos Diario antes de permitir nuevas compras (BUY)
+        # 7. Ejecutar entradas que cumplan la estrategia EMA 200 + Estocastico <= 20 + Vela Martillo/Envolvente
         max_dd_limit_pct = -abs(self.config.max_daily_drawdown_pct * 100.0)
         if daily_pnl_pct <= max_dd_limit_pct:
             logger.warning(
@@ -130,7 +178,6 @@ class AutonomousTradingBot:
                 max_dd_limit_pct,
             )
         else:
-            # Ordenar compras de mayor a menor confianza
             buy_decisions = [
                 d
                 for d in ai_result.decisions
@@ -142,41 +189,65 @@ class AutonomousTradingBot:
 
             for dec in buy_decisions:
                 if len(state.positions) >= self.config.max_open_positions:
-                    logger.info("Maximo de posiciones abiertas alcanzado (%d).", self.config.max_open_positions)
                     break
 
-                available_to_invest = usdt_free - self.config.min_usdt_reserve
-                if available_to_invest < self.config.min_order_usdt:
-                    logger.info(
-                        "USDT disponible tras reserva (%.2f USDT) menor al minimo por orden (%.2f USDT).",
-                        available_to_invest,
-                        self.config.min_order_usdt,
-                    )
-                    break
-
-                # Calcular tamano de posicion respetando MAX_POSITION_PCT
-                capped_alloc_pct = min(dec.allocation_pct, self.config.max_position_pct)
-                target_usdt = min(total_equity * capped_alloc_pct, available_to_invest)
-                if target_usdt < self.config.min_order_usdt:
-                    continue
-
+                snap = snapshots_map.get(dec.symbol)
                 price = all_prices.get(dec.symbol, 0.0)
                 if price <= 0:
                     continue
 
+                # Validar condicion de EMA 200 si el snapshot esta disponible
+                if snap is not None and not snap.above_ema_200:
+                    logger.info(
+                        "Omitiendo BUY en %s porque el precio (%.6f) esta por debajo de la EMA 200 (%.6f).",
+                        dec.symbol,
+                        price,
+                        snap.ema_200,
+                    )
+                    continue
+
+                # Determinar Stop-Loss en el ultimo bajo de la vela anterior (o fallback porcentual)
+                if snap is not None and 0 < snap.prev_candle_low < price:
+                    structural_sl = snap.prev_candle_low
+                else:
+                    structural_sl = round(price * (1.0 - dec.stop_loss_pct), 6)
+
+                available_to_invest = max(0.0, usdt_free - self.config.min_usdt_reserve)
+                if available_to_invest < self.config.min_order_usdt:
+                    break
+
+                # Calcular monto exacto arriesgando solo el 1% del capital (minimo $1 USD)
+                order_usdt, risk_usd = calculate_position_size_1pct_risk(
+                    total_equity_usdt=total_equity,
+                    available_usdt=available_to_invest,
+                    entry_price=price,
+                    stop_loss_price=structural_sl,
+                    risk_pct=self.config.risk_per_trade_pct,
+                    min_risk_usd=self.config.min_risk_usd,
+                    max_position_pct=min(dec.allocation_pct, self.config.max_position_pct),
+                )
+
+                if order_usdt < self.config.min_order_usdt:
+                    continue
+
+                pattern_tag = snap.candle_pattern if snap else "IA_SIGNAL"
+                stoch_tag = f"Stoch %K={snap.stoch_k}" if snap else ""
                 trade = self._execute_buy(
                     state=state,
                     symbol=dec.symbol,
-                    usdt_amount=target_usdt,
-                    stop_loss_pct=dec.stop_loss_pct,
+                    usdt_amount=order_usdt,
+                    stop_loss_price=structural_sl,
                     take_profit_pct=dec.take_profit_pct,
-                    reason=f"IA BUY (Confianza {dec.confidence}%): {dec.reasoning}",
+                    reason=(
+                        f"Estrategia EMA200+Stoch ({pattern_tag}, {stoch_tag}, Riesgo ~${risk_usd} USD / 1%): "
+                        f"{dec.reasoning}"
+                    ),
                 )
                 if trade:
                     executed_actions.append(trade)
-                    usdt_free -= float(trade.get("quote_qty", target_usdt))
+                    usdt_free -= float(trade.get("quote_qty", order_usdt))
 
-        # 8. Guardar estado actualizado y reporte Markdown para el repositorio
+        # 8. Guardar estado y reporte Markdown
         state.last_equity_usdt = total_equity
         self.state_manager.save_state(state)
         report_md = self._build_markdown_report(
@@ -220,7 +291,6 @@ class AutonomousTradingBot:
         usdt_free = float(balances.get(quote, 0.0))
         total_equity = usdt_free
 
-        # Sincronizar posiciones registradas con el balance real en Binance
         to_remove: list[str] = []
         for sym, pos in list(state.positions.items()):
             live_qty = float(balances.get(pos.base_asset, 0.0))
@@ -228,11 +298,6 @@ class AutonomousTradingBot:
             live_val_usdt = live_qty * cur_price
 
             if live_val_usdt < (self.config.min_order_usdt * 0.45):
-                logger.info(
-                    "Removiendo posicion %s del estado (valor actual %.2f USDT es polvo/cerrada).",
-                    sym,
-                    live_val_usdt,
-                )
                 to_remove.append(sym)
                 continue
 
@@ -244,10 +309,8 @@ class AutonomousTradingBot:
         for sym in to_remove:
             state.positions.pop(sym, None)
 
-        # Detectar activos Spot elegibles en la cuenta que no esten registrados aun
         for asset, qty in balances.items():
             if asset == quote or asset == "BNB":
-                # BNB suele reservarse para comisiones si es monto pequeno
                 if asset == "BNB":
                     bnb_price = all_prices.get("BNBUSDT", 0.0)
                     total_equity += qty * bnb_price
@@ -257,8 +320,7 @@ class AutonomousTradingBot:
                 continue
             cur_price = float(all_prices.get(sym, 0.0))
             val_usdt = qty * cur_price
-            if val_usdt >= self.config.min_order_usdt:
-                logger.info("Adoptando posicion existente en cuenta Spot: %s (%.4f unidades ~ %.2f USDT)", sym, qty, val_usdt)
+            if val_usdt >= max(self.config.min_order_usdt, 5.0):
                 state.positions[sym] = PositionState(
                     symbol=sym,
                     base_asset=asset,
@@ -283,11 +345,18 @@ class AutonomousTradingBot:
             return 0.0
         return ((total_equity - state.daily_start_equity_usdt) / state.daily_start_equity_usdt) * 100.0
 
-    def _enforce_hard_position_limits(
+    def _enforce_strategy_exits(
         self,
         state: BotState,
         all_prices: dict[str, float],
+        snapshots_map: dict[str, TechnicalSnapshot],
     ) -> list[dict[str, Any]]:
+        """
+        Cierra automaticamente cualquier posicion abierta cuando:
+        1. Toca el Stop-Loss ubicado en el ultimo bajo de la vela anterior.
+        2. El oscilador Estocastico en 1H llega a >= 80 (cierre por sobrecompra de la estrategia).
+        3. Toca el Take-Profit de respaldo.
+        """
         exits: list[dict[str, Any]] = []
         for sym, pos in list(state.positions.items()):
             cur_price = float(all_prices.get(sym, pos.entry_price))
@@ -298,22 +367,22 @@ class AutonomousTradingBot:
                 pos.highest_price = cur_price
 
             pnl_pct = pos.unrealized_pnl_pct(cur_price)
-            peak_gain_pct = ((pos.highest_price - pos.entry_price) / pos.entry_price) * 100.0 if pos.entry_price > 0 else 0.0
-            drop_from_peak_pct = pos.drawdown_from_peak_pct(cur_price)
+            snap = snapshots_map.get(sym)
 
             trigger_reason: str | None = None
             if pos.stop_loss_price > 0 and cur_price <= pos.stop_loss_price:
-                trigger_reason = f"STOP-LOSS ESTRICTO alcanzado ({cur_price} <= {pos.stop_loss_price}, PnL {pnl_pct:+.2f}%)"
-            elif pos.take_profit_price > 0 and cur_price >= pos.take_profit_price:
-                trigger_reason = f"TAKE-PROFIT alcanzado ({cur_price} >= {pos.take_profit_price}, PnL {pnl_pct:+.2f}%)"
-            elif (
-                peak_gain_pct >= (self.config.trailing_activation_pct * 100.0)
-                and drop_from_peak_pct >= (self.config.trailing_stop_pct * 100.0)
+                trigger_reason = (
+                    f"STOP-LOSS (Bajo de vela anterior) alcanzado ({cur_price} <= {pos.stop_loss_price}, PnL {pnl_pct:+.2f}%)"
+                )
+            elif snap is not None and (
+                snap.stoch_k >= self.config.stoch_overbought or snap.stoch_d >= self.config.stoch_overbought
             ):
                 trigger_reason = (
-                    f"TRAILING STOP activado (Pico {pos.highest_price}, retroceso -{drop_from_peak_pct:.2f}%, "
-                    f"ganancia asegurada {pnl_pct:+.2f}%)"
+                    f"CIERRE POR ESTOCASTICO >= {self.config.stoch_overbought:.0f} "
+                    f"(%K={snap.stoch_k}, %D={snap.stoch_d}, PnL {pnl_pct:+.2f}%)"
                 )
+            elif pos.take_profit_price > 0 and cur_price >= pos.take_profit_price:
+                trigger_reason = f"TAKE-PROFIT alcanzado ({cur_price} >= {pos.take_profit_price}, PnL {pnl_pct:+.2f}%)"
 
             if trigger_reason:
                 logger.warning("Ejecutando salida automatica en %s: %s", sym, trigger_reason)
@@ -328,7 +397,7 @@ class AutonomousTradingBot:
         state: BotState,
         symbol: str,
         usdt_amount: float,
-        stop_loss_pct: float,
+        stop_loss_price: float,
         take_profit_pct: float,
         reason: str,
     ) -> dict[str, Any] | None:
@@ -344,8 +413,8 @@ class AutonomousTradingBot:
             if exec_qty <= 0 or avg_price <= 0:
                 return None
 
-            sl_price = round(avg_price * (1.0 - stop_loss_pct), 6)
-            tp_price = round(avg_price * (1.0 + take_profit_pct), 6)
+            sl_price = round(stop_loss_price, 8) if stop_loss_price > 0 else round(avg_price * (1.0 - self.config.stop_loss_pct), 8)
+            tp_price = round(avg_price * (1.0 + take_profit_pct), 8)
             base_asset = symbol[: -len(self.config.quote_asset)]
 
             state.positions[symbol] = PositionState(
@@ -373,7 +442,7 @@ class AutonomousTradingBot:
                 "reason": reason,
             }
             self.state_manager.append_trade(record)
-            logger.info("COMPRA ejecutada: %s | Cantidad: %s @ %s | Total: %.2f USDT", symbol, exec_qty, avg_price, quote_qty)
+            logger.info("COMPRA ejecutada: %s | Cantidad: %s @ %s | Total: %.2f USDT | SL: %s", symbol, exec_qty, avg_price, quote_qty, sl_price)
             return record
         except Exception as exc:
             logger.error("Error al ejecutar COMPRA de %s: %s", symbol, exc)
@@ -444,15 +513,16 @@ class AutonomousTradingBot:
     ) -> str:
         mode_label = "SIMULACION (DRY_RUN)" if self.config.dry_run else "CUENTA REAL (LIVE)"
         lines = [
-            "# Reporte Autonomo de Trading - Binance + Gemini AI",
+            "# Reporte Autonomo - Estrategia EMA 200 + Estocastico (80/20) + Velas (1H)",
             "",
             f"- **Ultima actualizacion (UTC):** `{state.updated_at}`",
             f"- **Ciclo de ejecucion:** `#{state.total_cycles}`",
             f"- **Modo:** `{mode_label}`",
+            f"- **Temporalidad:** `{self.config.kline_interval_primary}` | **Riesgo por Operacion:** `{self.config.risk_per_trade_pct * 100:.1f}% (min ${self.config.min_risk_usd:.2f} USD)`",
             f"- **Capital Total Estimado:** `{total_equity:.2f} {self.config.quote_asset}`",
             f"- **Liquidez Disponible:** `{usdt_free:.2f} {self.config.quote_asset}`",
             f"- **Rendimiento Diario (UTC):** `{daily_pnl_pct:+.2f}%`",
-            f"- **Regimen de Mercado (Gemini):** `{ai_result.market_regime}`",
+            f"- **Regimen de Mercado (Gemini 3.8 Flash):** `{ai_result.market_regime}`",
             "",
             "## Lectura de Mercado de Gemini AI",
             f"> {ai_result.summary}",
@@ -465,7 +535,7 @@ class AutonomousTradingBot:
         else:
             lines.extend(
                 [
-                    "| Par | Cantidad | Entrada | Precio Actual | PnL (%) | Stop-Loss | Take-Profit |",
+                    "| Par | Cantidad | Entrada | Precio Actual | PnL (%) | Stop-Loss (Bajo Vela Previa) | Salida Estocastico |",
                     "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
                 ]
             )
@@ -473,7 +543,7 @@ class AutonomousTradingBot:
                 cur = all_prices.get(sym, pos.entry_price)
                 pnl = pos.unrealized_pnl_pct(cur)
                 lines.append(
-                    f"| `{sym}` | {pos.quantity} | {pos.entry_price} | {cur} | **{pnl:+.2f}%** | {pos.stop_loss_price} | {pos.take_profit_price} |"
+                    f"| `{sym}` | {pos.quantity} | {pos.entry_price} | {cur} | **{pnl:+.2f}%** | {pos.stop_loss_price} | `Stoch >= {self.config.stoch_overbought:.0f}` |"
                 )
 
         lines.extend(["", "## Operaciones Ejecutadas en este Ciclo"])
@@ -489,19 +559,19 @@ class AutonomousTradingBot:
         lines.extend(
             [
                 "",
-                "## Escaneo Dinamico y Decisiones IA",
-                "| Par | Precio | Cambio 24h | RSI (15m) | Tendencia (15m/1h) | Decision IA | Confianza | Motivo |",
-                "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |",
+                "## Escaneo 1H: EMA 200 + Estocastico (20/80) + Patrones de Vela",
+                "| Par | Precio | EMA 200 | Posicion EMA | Estocastico (%K / %D) | Patron de Vela (1H) | SL Vela Previa | Setup | Decision IA |",
+                "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
             ]
         )
         dec_map = {d.symbol: d for d in ai_result.decisions}
         for s in snapshots:
             d = dec_map.get(s.symbol)
-            act = d.action if d else "HOLD"
-            conf = f"{d.confidence}%" if d else "-"
-            reason = d.reasoning if d else "-"
+            act = f"**{d.action}** ({d.confidence}%)" if d else "HOLD"
+            ema_pos = "SOBRE EMA 200 (Alza)" if s.above_ema_200 else "BAJO EMA 200 (Baja)"
+            sl_ref = s.prev_candle_low if s.above_ema_200 else s.prev_candle_high
             lines.append(
-                f"| `{s.symbol}` | {s.current_price} | {s.price_change_24h_pct:+.2f}% | {s.rsi_14} | `{s.trend_primary}` / `{s.htf_trend}` | **{act}** | {conf} | {reason} |"
+                f"| `{s.symbol}` | {s.current_price} | {s.ema_200} | {ema_pos} | `{s.stoch_k}` / `{s.stoch_d}` | `{s.candle_pattern}` | {sl_ref} | `{s.strategy_setup}` | {act} |"
             )
 
         return "\n".join(lines) + "\n"

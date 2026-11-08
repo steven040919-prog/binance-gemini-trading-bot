@@ -57,28 +57,41 @@ class BotConfig:
     dry_run: bool = field(default_factory=lambda: _env_bool("DRY_RUN", False))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash")
 
-    # Parametros de cartera y gestion de riesgo estricta
-    quote_asset: str = field(default_factory=lambda: os.getenv("QUOTE_ASSET", "USDT").strip().upper() or "USDT")
-    max_open_positions: int = field(default_factory=lambda: _env_int("MAX_OPEN_POSITIONS", 3))
-    max_position_pct: float = field(default_factory=lambda: _env_float("MAX_POSITION_PCT", 0.25))
-    min_order_usdt: float = field(default_factory=lambda: _env_float("MIN_ORDER_USDT", 12.0))
-    min_usdt_reserve: float = field(default_factory=lambda: _env_float("MIN_USDT_RESERVE", 15.0))
+    # Mercado: "spot" (solo LONG) o "futures" (LONG y SHORT con EMA 200)
+    trading_market: str = field(default_factory=lambda: os.getenv("TRADING_MARKET", "spot").strip().lower() or "spot")
 
-    # Stop-Loss, Take-Profit y Trailing Stop
-    stop_loss_pct: float = field(default_factory=lambda: _env_float("STOP_LOSS_PCT", 0.035))
-    take_profit_pct: float = field(default_factory=lambda: _env_float("TAKE_PROFIT_PCT", 0.070))
+    # Parametros de la Estrategia: EMA 200 + Estocastico (80/20) + Martillo/Envolvente en 1H
+    kline_interval_primary: str = field(default_factory=lambda: os.getenv("KLINE_INTERVAL_PRIMARY", "1h").strip() or "1h")
+    kline_interval_htf: str = field(default_factory=lambda: os.getenv("KLINE_INTERVAL_HTF", "4h").strip() or "4h")
+    ema_trend_period: int = field(default_factory=lambda: _env_int("EMA_TREND_PERIOD", 200))
+    stoch_k_period: int = field(default_factory=lambda: _env_int("STOCH_K_PERIOD", 14))
+    stoch_smooth_k: int = field(default_factory=lambda: _env_int("STOCH_SMOOTH_K", 3))
+    stoch_d_period: int = field(default_factory=lambda: _env_int("STOCH_D_PERIOD", 3))
+    stoch_overbought: float = field(default_factory=lambda: _env_float("STOCH_OVERBOUGHT", 80.0))
+    stoch_oversold: float = field(default_factory=lambda: _env_float("STOCH_OVERSOLD", 20.0))
+
+    # Gestion de Riesgo del 1% del capital total (minimo $1 USD)
+    quote_asset: str = field(default_factory=lambda: os.getenv("QUOTE_ASSET", "USDT").strip().upper() or "USDT")
+    risk_per_trade_pct: float = field(default_factory=lambda: _env_float("RISK_PER_TRADE_PCT", 0.01))
+    min_risk_usd: float = field(default_factory=lambda: _env_float("MIN_RISK_USD", 1.0))
+    max_open_positions: int = field(default_factory=lambda: _env_int("MAX_OPEN_POSITIONS", 3))
+    max_position_pct: float = field(default_factory=lambda: _env_float("MAX_POSITION_PCT", 0.35))
+    min_order_usdt: float = field(default_factory=lambda: _env_float("MIN_ORDER_USDT", 1.0))
+    min_usdt_reserve: float = field(default_factory=lambda: _env_float("MIN_USDT_RESERVE", 1.0))
+
+    # Respaldo de Stop-Loss/Take-Profit si no hay vela previa
+    stop_loss_pct: float = field(default_factory=lambda: _env_float("STOP_LOSS_PCT", 0.025))
+    take_profit_pct: float = field(default_factory=lambda: _env_float("TAKE_PROFIT_PCT", 0.060))
     trailing_stop_pct: float = field(default_factory=lambda: _env_float("TRAILING_STOP_PCT", 0.025))
-    trailing_activation_pct: float = field(default_factory=lambda: _env_float("TRAILING_ACTIVATION_PCT", 0.030))
+    trailing_activation_pct: float = field(default_factory=lambda: _env_float("TRAILING_ACTIVATION_PCT", 0.035))
 
     # Cortacircuitos diario
-    max_daily_drawdown_pct: float = field(default_factory=lambda: _env_float("MAX_DAILY_DRAWDOWN_PCT", 0.060))
+    max_daily_drawdown_pct: float = field(default_factory=lambda: _env_float("MAX_DAILY_DRAWDOWN_PCT", 0.050))
 
     # Escaneo dinamico
-    top_candidates_limit: int = field(default_factory=lambda: _env_int("TOP_CANDIDATES_LIMIT", 8))
-    min_24h_volume_usdt: float = field(default_factory=lambda: _env_float("MIN_24H_VOLUME_USDT", 15_000_000.0))
-    min_ai_confidence: int = field(default_factory=lambda: _env_int("MIN_AI_CONFIDENCE", 72))
-    kline_interval_primary: str = field(default_factory=lambda: os.getenv("KLINE_INTERVAL_PRIMARY", "15m").strip() or "15m")
-    kline_interval_htf: str = field(default_factory=lambda: os.getenv("KLINE_INTERVAL_HTF", "1h").strip() or "1h")
+    top_candidates_limit: int = field(default_factory=lambda: _env_int("TOP_CANDIDATES_LIMIT", 12))
+    min_24h_volume_usdt: float = field(default_factory=lambda: _env_float("MIN_24H_VOLUME_USDT", 10_000_000.0))
+    min_ai_confidence: int = field(default_factory=lambda: _env_int("MIN_AI_CONFIDENCE", 70))
 
     # Rutas de persistencia en el repositorio
     data_dir: Path = field(default_factory=lambda: BASE_DIR / "data")
@@ -99,9 +112,5 @@ class BotConfig:
                 f"Faltan variables de entorno obligatorias: {', '.join(missing)}. "
                 "Configuralas en GitHub Secrets o en tu archivo .env local."
             )
-        if not (0.01 <= self.max_position_pct <= 1.0):
-            raise ValueError("MAX_POSITION_PCT debe estar entre 0.01 (1%) y 1.0 (100%).")
-        if not (0.005 <= self.stop_loss_pct <= 0.50):
-            raise ValueError("STOP_LOSS_PCT debe estar entre 0.005 (0.5%) y 0.50 (50%).")
-        if not (0.01 <= self.take_profit_pct <= 2.0):
-            raise ValueError("TAKE_PROFIT_PCT debe estar entre 0.01 (1%) y 2.0 (200%).")
+        if not (0.001 <= self.risk_per_trade_pct <= 0.20):
+            raise ValueError("RISK_PER_TRADE_PCT debe estar entre 0.001 (0.1%) y 0.20 (20%).")

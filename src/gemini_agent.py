@@ -18,9 +18,9 @@ class AIDecision:
     symbol: str
     action: str  # "BUY", "SELL", "HOLD"
     confidence: int  # 0..100
-    allocation_pct: float  # Para BUY: 0.05..max_position_pct del capital total; Para SELL: 1.0 (100% de la posicion)
-    stop_loss_pct: float  # % bajo el precio de entrada
-    take_profit_pct: float  # % sobre el precio de entrada
+    allocation_pct: float
+    stop_loss_pct: float
+    take_profit_pct: float
     reasoning: str
 
 
@@ -38,30 +38,37 @@ class AIAnalysisResult:
         }
 
 
-SYSTEM_INSTRUCTION = """Eres un gestor cuantitativo autonomo de carteras de criptomonedas en Binance Spot.
-Tu objetivo primordial es preservar el capital y capturar tendencias con alta probabilidad de exito (relacion Riesgo/Beneficio >= 1.8:1).
+SYSTEM_INSTRUCTION = """Eres el motor de inteligencia artificial de un bot autonomo que ejecuta ESTRICTAMENTE la siguiente estrategia en temporalidad de 1 Hora (1h):
 
-REGLAS ESTRICTAS DE OPERACION:
-1. Solo operas en Spot contra USDT (sin apalancamiento, solo compras BUY y ventas SELL de posiciones existentes).
-2. Prioriza compras (BUY) unicamente cuando:
-   - El timeframe superior (1h `htf_trend`) sea BULLISH o NEUTRAL en recuperacion clara.
-   - El RSI de 15m (`rsi_14`) no este en sobrecompra extrema (< 70) y muestre impulso alcista (MACD histograma positivo o girando al alza, precio sobre EMA 21 o rebotando en soporte con `volume_ratio` >= 1.0).
-3. Recomienda vender (SELL) una posicion abierta cuando:
-   - La estructura tecnica en 15m y 1h se vuelva BEARISH con perdida de EMAs clave, o el activo muestre agotamiento claro en sobrecompra extrema (RSI > 76 con divergencia/caida de volumen).
-4. Si ninguna oportunidad es clara o el mercado general es bajista/peligroso, recomienda HOLD. No fuerces operaciones mediocres.
-5. Responde SIEMPRE y UNICAMENTE con un objeto JSON valido que cumpla exactamente este esquema:
+REGLAS OBLIGATORIAS DE LA ESTRATEGIA (EMA 200 + ESTOCASTICO 80/20 + VELAS MARTILLO / ENVOLVENTE):
+1. CONDICION DE COMPRA (ALZA / LONG):
+   - El precio actual DEBE estar POR ENCIMA de la EMA de 200 periodos (`above_ema_200 == true`, `current_price > ema_200`).
+   - El oscilador Estocastico (`stoch_k` o `stoch_recent_min`) debe haber llegado a la zona de sobreventa (`<= 20`) durante el retroceso.
+   - Debe haberse formado una vela de confirmacion alcista: **Vela Martillo Alcista (`BULLISH_HAMMER`)** o **Vela Envolvente Alcista (`BULLISH_ENGULFING`)** (`strategy_setup == "LONG_ENTRY"`).
+   - El Stop-Loss se coloca exactamente en el ultimo bajo de la vela anterior (`prev_candle_low`).
+   - El cierre de la compra se realiza cuando el Estocastico sube y alcanza `>= 80` (`EXIT_LONG_STOCH_80`).
+
+2. CONDICION DE VENTA / BAJA (SHORT O CIERRE):
+   - Si ya tenemos una posicion abierta y el Estocastico llega a `>= 80` (en compra) o `<= 20` (en corto), recomienda `SELL` con confianza >= 90 para cerrar la operativa en ganancia.
+   - Si el grafico esta POR DEBAJO de la EMA de 200 periodos (`above_ema_200 == false`), el Estocastico sube a sobrecompra (`>= 80`) y forma una **Vela Martillo Invertido / Estrella Fugaz (`BEARISH_SHOOTING_STAR`)** o **Vela Envolvente Bajista (`BEARISH_ENGULFING`)** (`strategy_setup == "SHORT_ENTRY"`), senala `SELL` (con Stop-Loss en el ultimo alto de la vela anterior `prev_candle_high` y cierre cuando el Estocastico baje a `20`).
+
+3. GESTION DE RIESGO:
+   - Solo se arriesga el 1% del monto total de la cuenta (minimo $1 USD) por operacion, calculado sobre la distancia al Stop-Loss de la vela anterior.
+   - Si un par NO cumple las condiciones de EMA 200 + Estocastico 20/80 + Vela Martillo/Envolvente, emite `HOLD`.
+
+4. Responde SIEMPRE y UNICAMENTE con un objeto JSON valido con este esquema:
 {
   "market_regime": "BULLISH | BEARISH | SIDEWAYS | HIGH_VOLATILITY",
-  "summary": "Resumen ejecutivo en espanol del estado del mercado y la cartera",
+  "summary": "Resumen ejecutivo en espanol evaluando EMA 200, Estocastico (20/80) y patrones de velas en 1H",
   "decisions": [
     {
       "symbol": "BTCUSDT",
       "action": "BUY | SELL | HOLD",
-      "confidence": 82,
+      "confidence": 88,
       "allocation_pct": 0.20,
-      "stop_loss_pct": 0.035,
-      "take_profit_pct": 0.070,
-      "reasoning": "Justificacion tecnica concisa en espanol"
+      "stop_loss_pct": 0.02,
+      "take_profit_pct": 0.05,
+      "reasoning": "Precio sobre EMA 200 en 1H, Estocastico en 18 (sobreventa) y vela envolvente alcista confirmada. SL en bajo previo."
     }
   ]
 }
@@ -69,7 +76,7 @@ REGLAS ESTRICTAS DE OPERACION:
 
 
 class GeminiTradingAgent:
-    """Agente de IA impulsado por Google Gemini para analisis cuantitativo y toma de decisiones."""
+    """Agente de IA impulsado por Google Gemini (gemini-3.8-flash) para la estrategia EMA 200 + Estocastico + Velas."""
 
     def __init__(self, api_key: str, model: str = "gemini-3.8-flash", timeout: int = 45) -> None:
         self.api_key = api_key.strip()
@@ -108,26 +115,28 @@ class GeminiTradingAgent:
             )
 
         prompt_payload = {
+            "strategy_rules": {
+                "timeframe": "1h",
+                "trend_indicator": "EMA 200",
+                "oscillator": "Stochastic (14,3,3) levels 20 / 80",
+                "entry_patterns": ["BULLISH_HAMMER", "BULLISH_ENGULFING", "BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING"],
+                "risk_per_trade": "1% of total equity (min $1 USD) based on previous candle low/high stop-loss",
+            },
             "portfolio": {
                 "usdt_free": round(usdt_free, 2),
                 "total_equity_usdt": round(total_equity_usdt, 2),
                 "daily_pnl_pct": round(daily_pnl_pct, 2),
                 "open_positions_count": len(open_positions),
                 "max_open_positions": max_open_positions,
-                "max_position_pct": max_position_pct,
                 "open_positions": positions_payload,
-            },
-            "risk_defaults": {
-                "default_stop_loss_pct": default_sl_pct,
-                "default_take_profit_pct": default_tp_pct,
             },
             "market_candidates": [s.to_dict() for s in snapshots],
             "recent_trades": recent_trades[-8:],
         }
 
         user_prompt = (
-            "Analiza el siguiente estado de cartera y los indicadores tecnicos en tiempo real de Binance Spot. "
-            "Emite tu decision estructurada en JSON:\n\n"
+            "Evalua los siguientes activos en temporalidad 1H aplicando estrictamente la estrategia "
+            "EMA 200 + Estocastico (20/80) + Vela Martillo/Envolvente. Emite tu decision en JSON:\n\n"
             + json.dumps(prompt_payload, indent=2, ensure_ascii=False)
         )
 
@@ -140,7 +149,6 @@ class GeminiTradingAgent:
         )
 
     def _call_gemini(self, user_prompt: str) -> str:
-        # Intenta primero con el SDK oficial google-genai (Interactions API) y cae a REST directo si no esta instalado
         try:
             from google import genai
 
@@ -163,7 +171,7 @@ class GeminiTradingAgent:
             "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
             "generationConfig": {
-                "temperature": 0.15,
+                "temperature": 0.1,
                 "responseMimeType": "application/json",
             },
         }
@@ -180,7 +188,7 @@ class GeminiTradingAgent:
         if not candidates:
             raise RuntimeError(f"Gemini no devolvio candidatos: {data}")
         parts = candidates[0].get("content", {}).get("parts", [])
-        return "".join(part.get("text", "") for part in parts)
+        return "".join(part.get("text", "") for part in parts if "text" in part)
 
     def _parse_response(
         self,
@@ -208,13 +216,13 @@ class GeminiTradingAgent:
 
             confidence = int(max(0, min(100, int(item.get("confidence", 50)))))
             alloc = float(item.get("allocation_pct", max_position_pct))
-            alloc = max(0.05, min(max_position_pct, alloc)) if action == "BUY" else 1.0
+            alloc = max(0.01, min(max_position_pct, alloc)) if action == "BUY" else 1.0
 
             sl_pct = float(item.get("stop_loss_pct", default_sl_pct))
-            sl_pct = max(0.01, min(0.15, sl_pct))
+            sl_pct = max(0.002, min(0.15, sl_pct))
 
             tp_pct = float(item.get("take_profit_pct", default_tp_pct))
-            tp_pct = max(0.02, min(0.35, tp_pct))
+            tp_pct = max(0.005, min(0.35, tp_pct))
 
             reasoning = str(item.get("reasoning", "")).strip()
             decisions.append(
