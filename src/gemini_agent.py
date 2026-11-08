@@ -87,7 +87,7 @@ REGLAS OBLIGATORIAS DE LA ESTRATEGIA (EMA 200 + ESTOCASTICO 80/20 + VELAS MARTIL
 class GeminiTradingAgent:
     """Agente de IA impulsado por Google Gemini (gemini-3.8-flash) con gestion dinamica de SL/TP."""
 
-    def __init__(self, api_key: str, model: str = "gemini-3.8-flash", timeout: int = 45) -> None:
+    def __init__(self, api_key: str, model: str = "gemini-3.8-flash", timeout: int = 90) -> None:
         self.api_key = api_key.strip()
         self.model = model.strip() or "gemini-3.8-flash"
         self.timeout = timeout
@@ -156,55 +156,153 @@ class GeminiTradingAgent:
             + json.dumps(prompt_payload, indent=2, ensure_ascii=False)
         )
 
-        raw_text = self._call_gemini(user_prompt)
-        return self._parse_response(
-            raw_text=raw_text,
-            max_position_pct=max_position_pct,
-            default_sl_pct=default_sl_pct,
-            default_tp_pct=default_tp_pct,
-        )
+        try:
+            raw_text = self._call_gemini(user_prompt)
+            return self._parse_response(
+                raw_text=raw_text,
+                max_position_pct=max_position_pct,
+                default_sl_pct=default_sl_pct,
+                default_tp_pct=default_tp_pct,
+            )
+        except Exception as exc:
+            logger.warning("Usando motor cuantitativo determinista de respaldo tras demora/error en Gemini API: %s", exc)
+            return self._fallback_deterministic_analysis(
+                snapshots=snapshots,
+                open_positions=open_positions,
+                max_position_pct=max_position_pct,
+                default_sl_pct=default_sl_pct,
+                default_tp_pct=default_tp_pct,
+            )
 
     def _call_gemini(self, user_prompt: str) -> str:
-        try:
-            from google import genai
+        models_to_try = [self.model]
+        if "gemini-3.5-flash-lite" not in models_to_try:
+            models_to_try.append("gemini-3.5-flash-lite")
 
-            client = genai.Client(api_key=self.api_key)
-            interaction = client.interactions.create(
-                model=self.model,
-                input=user_prompt,
-                system_instruction=SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-            )
-            if interaction and getattr(interaction, "output_text", None):
-                return interaction.output_text
-        except ImportError:
-            logger.debug("SDK google-genai no disponible, usando llamada REST directa.")
-        except Exception as exc:
-            logger.warning("Fallo en SDK google-genai (%s), intentando llamada REST directa...", exc)
+        last_err: Exception | None = None
+        for mdl in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{mdl}:generateContent"
+            payload = {
+                "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.1,
+                    "responseMimeType": "application/json",
+                },
+            }
+            try:
+                resp = requests.post(
+                    url,
+                    params={"key": self.api_key},
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                if resp.status_code >= 400:
+                    last_err = RuntimeError(f"Error en Gemini API ({mdl}, HTTP {resp.status_code}): {resp.text[:250]}")
+                    continue
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    last_err = RuntimeError(f"Gemini ({mdl}) no devolvio candidatos.")
+                    continue
+                parts = candidates[0].get("content", {}).get("parts", [])
+                text = "".join(part.get("text", "") for part in parts if "text" in part)
+                if text.strip():
+                    return text
+            except Exception as exc:
+                last_err = exc
+                logger.warning("Intento con modelo %s fallo/excedio tiempo: %s", mdl, exc)
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-        payload = {
-            "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
-            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {
-                "temperature": 0.1,
-                "responseMimeType": "application/json",
-            },
-        }
-        resp = requests.post(
-            url,
-            params={"key": self.api_key},
-            json=payload,
-            timeout=self.timeout,
+        if last_err:
+            raise last_err
+        raise RuntimeError("No se pudo obtener respuesta de Gemini API.")
+
+    def _fallback_deterministic_analysis(
+        self,
+        snapshots: list[TechnicalSnapshot],
+        open_positions: dict[str, PositionState],
+        max_position_pct: float,
+        default_sl_pct: float,
+        default_tp_pct: float,
+    ) -> AIAnalysisResult:
+        bullish_count = sum(1 for s in snapshots if s.above_ema_200)
+        regime = "BULLISH" if bullish_count >= len(snapshots) / 2 else "BEARISH"
+        decisions: list[AIDecision] = []
+
+        for s in snapshots:
+            pos = open_positions.get(s.symbol)
+            if pos is not None:
+                pnl = pos.unrealized_pnl_pct(s.current_price)
+                if s.stoch_k >= 80.0 and s.candle_pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING"):
+                    decisions.append(
+                        AIDecision(
+                            symbol=s.symbol,
+                            action="SELL",
+                            confidence=90,
+                            allocation_pct=1.0,
+                            stop_loss_pct=default_sl_pct,
+                            take_profit_pct=default_tp_pct,
+                            reasoning=f"Estocastico en sobrecompra ({s.stoch_k}) con vela bajista {s.candle_pattern}.",
+                        )
+                    )
+                elif pnl > 1.0:
+                    new_sl = max(pos.stop_loss_price, s.prev_candle_low, round(pos.entry_price + (s.current_price - pos.entry_price) * 0.65, 8))
+                    new_tp = max(pos.take_profit_price, round(s.current_price * 1.04, 8))
+                    decisions.append(
+                        AIDecision(
+                            symbol=s.symbol,
+                            action="ADJUST",
+                            confidence=85,
+                            allocation_pct=max_position_pct,
+                            stop_loss_pct=default_sl_pct,
+                            take_profit_pct=default_tp_pct,
+                            new_stop_loss_price=new_sl,
+                            new_take_profit_price=new_tp,
+                            reasoning="Posicion en ganancia: subiendo Stop-Loss y expandiendo Take-Profit para dejar correr la tendencia.",
+                        )
+                    )
+                else:
+                    decisions.append(
+                        AIDecision(
+                            symbol=s.symbol,
+                            action="HOLD",
+                            confidence=75,
+                            allocation_pct=max_position_pct,
+                            stop_loss_pct=default_sl_pct,
+                            take_profit_pct=default_tp_pct,
+                            reasoning="Manteniendo posicion abierta bajo vigilancia de SL y Estocastico.",
+                        )
+                    )
+            elif s.strategy_setup == "LONG_ENTRY":
+                decisions.append(
+                    AIDecision(
+                        symbol=s.symbol,
+                        action="BUY",
+                        confidence=88,
+                        allocation_pct=max_position_pct,
+                        stop_loss_pct=default_sl_pct,
+                        take_profit_pct=default_tp_pct,
+                        reasoning=f"Precio sobre EMA 200 ({s.ema_200}), Estocastico en sobreventa ({s.stoch_k}) y patron {s.candle_pattern}.",
+                    )
+                )
+            else:
+                decisions.append(
+                    AIDecision(
+                        symbol=s.symbol,
+                        action="HOLD",
+                        confidence=70,
+                        allocation_pct=max_position_pct,
+                        stop_loss_pct=default_sl_pct,
+                        take_profit_pct=default_tp_pct,
+                        reasoning=f"Esperando setup completo (EMA200={'Alcista' if s.above_ema_200 else 'Bajista'}, Stoch %K={s.stoch_k}, Vela={s.candle_pattern}).",
+                    )
+                )
+
+        return AIAnalysisResult(
+            market_regime=regime,
+            summary=f"Evaluacion cuantitativa completada sobre {len(snapshots)} pares en 1H ({bullish_count} sobre EMA 200).",
+            decisions=decisions,
         )
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Error en Gemini API (HTTP {resp.status_code}): {resp.text}")
-        data = resp.json()
-        candidates = data.get("candidates", [])
-        if not candidates:
-            raise RuntimeError(f"Gemini no devolvio candidatos: {data}")
-        parts = candidates[0].get("content", {}).get("parts", [])
-        return "".join(part.get("text", "") for part in parts if "text" in part)
 
     def _parse_response(
         self,
