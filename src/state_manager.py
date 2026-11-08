@@ -29,11 +29,31 @@ class PositionState:
     take_profit_price: float
     opened_at: str
     entry_reason: str = ""
+    initial_stop_loss_price: float = 0.0
+    sl_adjustments_count: int = 0
+    last_adjustment_reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.initial_stop_loss_price <= 0 and self.stop_loss_price > 0:
+            self.initial_stop_loss_price = self.stop_loss_price
 
     def unrealized_pnl_pct(self, current_price: float) -> float:
         if self.entry_price <= 0:
             return 0.0
         return ((current_price - self.entry_price) / self.entry_price) * 100.0
+
+    def locked_profit_pct(self) -> float:
+        """Retorna el porcentaje de ganancia ya asegurado por el Stop-Loss actual."""
+        if self.entry_price <= 0 or self.stop_loss_price <= 0:
+            return 0.0
+        return ((self.stop_loss_price - self.entry_price) / self.entry_price) * 100.0
+
+    def r_multiple(self, current_price: float) -> float:
+        """Calcula cuantas veces el riesgo inicial (R) lleva ganando la operacion."""
+        initial_risk = abs(self.entry_price - self.initial_stop_loss_price)
+        if initial_risk <= 0:
+            return 0.0
+        return (current_price - self.entry_price) / initial_risk
 
     def drawdown_from_peak_pct(self, current_price: float) -> float:
         peak = max(self.highest_price, self.entry_price)
@@ -66,16 +86,20 @@ class BotState:
         raw_positions = data.get("positions", {}) or {}
         positions: dict[str, PositionState] = {}
         for sym, pos_dict in raw_positions.items():
+            sl_price = float(pos_dict.get("stop_loss_price", 0.0))
             positions[sym] = PositionState(
                 symbol=pos_dict["symbol"],
                 base_asset=pos_dict.get("base_asset", sym.replace("USDT", "")),
                 quantity=float(pos_dict["quantity"]),
                 entry_price=float(pos_dict["entry_price"]),
                 highest_price=float(pos_dict.get("highest_price", pos_dict["entry_price"])),
-                stop_loss_price=float(pos_dict.get("stop_loss_price", 0.0)),
+                stop_loss_price=sl_price,
                 take_profit_price=float(pos_dict.get("take_profit_price", 0.0)),
                 opened_at=pos_dict.get("opened_at", utc_now_iso()),
                 entry_reason=pos_dict.get("entry_reason", ""),
+                initial_stop_loss_price=float(pos_dict.get("initial_stop_loss_price", sl_price)),
+                sl_adjustments_count=int(pos_dict.get("sl_adjustments_count", 0)),
+                last_adjustment_reason=str(pos_dict.get("last_adjustment_reason", "")),
             )
         return cls(
             updated_at=data.get("updated_at", utc_now_iso()),

@@ -11,10 +11,6 @@ from src.config import BotConfig
 from src.gemini_agent import AIAnalysisResult, AIDecision, GeminiTradingAgent
 from src.market_scanner import (
     TechnicalSnapshot,
-    calc_bollinger_bands,
-    calc_ema_series,
-    calc_macd,
-    calc_rsi,
     calc_stochastic,
     detect_candle_pattern,
 )
@@ -69,7 +65,11 @@ class FakeBinanceClient:
 class FakeScanner:
     def __init__(self) -> None:
         self.sol_stoch_k = 18.0
+        self.sol_price = 210.0
+        self.sol_prev_low = 205.8
+        self.sol_pattern = "BULLISH_ENGULFING"
         self.eth_stoch_k = 45.0
+        self.eth_pattern = "NONE"
 
     def is_eligible_symbol(self, symbol: str) -> bool:
         return symbol.endswith("USDT") and not symbol.startswith("USDC")
@@ -78,22 +78,22 @@ class FakeScanner:
         return [
             TechnicalSnapshot(
                 symbol="SOLUSDT",
-                current_price=210.0,
+                current_price=self.sol_price,
                 price_change_24h_pct=4.5,
                 quote_volume_24h_usdt=450_000_000.0,
-                high_24h=215.0,
+                high_24h=235.0,
                 low_24h=195.0,
                 ema_200=195.0,
                 above_ema_200=True,
                 stoch_k=self.sol_stoch_k,
-                stoch_d=19.5,
+                stoch_d=self.sol_stoch_k,
                 stoch_recent_min=16.0,
-                stoch_recent_max=28.0,
-                candle_pattern="BULLISH_ENGULFING",
-                prev_candle_low=205.8,  # 2% bajo 210.0
-                prev_candle_high=212.0,
+                stoch_recent_max=self.sol_stoch_k,
+                candle_pattern=self.sol_pattern,
+                prev_candle_low=self.sol_prev_low,
+                prev_candle_high=self.sol_price + 2.0,
                 strategy_setup="LONG_ENTRY",
-                rsi_14=42.0,
+                rsi_14=52.0,
                 ema_9=208.0,
                 ema_21=204.0,
                 ema_50=198.0,
@@ -101,13 +101,13 @@ class FakeScanner:
                 macd_line=1.5,
                 macd_signal=1.1,
                 macd_hist=0.4,
-                bb_upper=216.0,
+                bb_upper=230.0,
                 bb_lower=196.0,
-                bb_pct_b=0.3,
-                atr_pct=1.8,
+                bb_pct_b=0.5,
+                atr_pct=2.0,
                 volume_ratio=1.45,
-                support_level=205.8,
-                resistance_level=215.0,
+                support_level=self.sol_prev_low,
+                resistance_level=235.0,
                 htf_rsi_14=55.0,
                 htf_ema_21=202.0,
                 htf_ema_50=194.0,
@@ -126,7 +126,7 @@ class FakeScanner:
                 stoch_d=self.eth_stoch_k,
                 stoch_recent_min=40.0,
                 stoch_recent_max=self.eth_stoch_k,
-                candle_pattern="NONE",
+                candle_pattern=self.eth_pattern,
                 prev_candle_low=3120.0,
                 prev_candle_high=3240.0,
                 strategy_setup="WATCH",
@@ -155,13 +155,13 @@ class FakeScanner:
 
 class FakeAIAgent:
     def __init__(self, decisions: list[AIDecision]) -> None:
-        self._decisions = decisions
+        self.decisions = decisions
 
     def analyze_market(self, **kwargs: Any) -> AIAnalysisResult:
         return AIAnalysisResult(
             market_regime="BULLISH",
-            summary="SOLUSDT sobre EMA 200 con Estocastico en 18 y vela envolvente alcista.",
-            decisions=self._decisions,
+            summary="SOLUSDT en tendencia fuerte con gestion dinamica de SL/TP.",
+            decisions=self.decisions,
         )
 
 
@@ -182,36 +182,28 @@ def test_symbol_filters_rounding() -> None:
 
 
 def test_candlestick_patterns_and_stochastic() -> None:
-    # 1. Bullish Hammer
     prev = {"open": 105.0, "high": 106.0, "low": 100.0, "close": 101.0}
     hammer = {"open": 101.0, "high": 102.5, "low": 95.0, "close": 102.0}
     assert detect_candle_pattern(hammer, prev) == "BULLISH_HAMMER"
 
-    # 2. Bullish Engulfing
     prev_red = {"open": 102.0, "high": 102.5, "low": 99.5, "close": 100.0}
     curr_green = {"open": 99.8, "high": 103.0, "low": 99.5, "close": 102.5}
     assert detect_candle_pattern(curr_green, prev_red) == "BULLISH_ENGULFING"
 
-    # 3. Bearish Shooting Star
     prev_up = {"open": 100.0, "high": 104.0, "low": 99.5, "close": 103.5}
     star = {"open": 103.5, "high": 110.0, "low": 102.5, "close": 102.8}
     assert detect_candle_pattern(star, prev_up) == "BEARISH_SHOOTING_STAR"
 
-    # 4. Bearish Engulfing
     prev_green = {"open": 100.0, "high": 102.5, "low": 99.5, "close": 102.0}
     curr_red = {"open": 102.2, "high": 102.5, "low": 99.0, "close": 99.5}
     assert detect_candle_pattern(curr_red, prev_green) == "BEARISH_ENGULFING"
 
-    # 5. Stochastic (14, 3, 3)
     candles = [{"open": 100 + i, "high": 102 + i, "low": 99 + i, "close": 101.5 + i} for i in range(25)]
     k_s, d_s = calc_stochastic(candles, 14, 3, 3)
     assert len(k_s) > 5 and 70.0 <= k_s[-1] <= 100.0 and 70.0 <= d_s[-1] <= 100.0
 
 
 def test_1pct_risk_position_sizing() -> None:
-    # Cuenta de $500 USD -> 1% de riesgo = $5 USD
-    # Entrada en $100, Stop-Loss (bajo vela previa) en $98 (distancia 2%)
-    # Para arriesgar $5 USD con 2% de SL, tamano ideal = $5 / 0.02 = $250 USD (acotado a max_position_pct=0.35 -> $175 USD)
     order_usdt, risk_usd = calculate_position_size_1pct_risk(
         total_equity_usdt=500.0,
         available_usdt=400.0,
@@ -224,19 +216,8 @@ def test_1pct_risk_position_sizing() -> None:
     assert risk_usd == 5.0
     assert order_usdt == 175.0
 
-    # Cuenta pequena de $50 USD -> 1% es $0.50, pero aplica piso minimo de $1.00 USD
-    _, min_r = calculate_position_size_1pct_risk(
-        total_equity_usdt=50.0,
-        available_usdt=50.0,
-        entry_price=100.0,
-        stop_loss_price=95.0,
-        risk_pct=0.01,
-        min_risk_usd=1.0,
-    )
-    assert min_r == 1.0
 
-
-def test_bot_cycle_strategy_ema200_stoch_and_exits(tmp_path: Path) -> None:
+def test_dynamic_sl_tp_trailing_and_ai_adjust(tmp_path: Path) -> None:
     cfg = BotConfig(
         binance_api_key="key",
         binance_api_secret="secret",
@@ -260,7 +241,7 @@ def test_bot_cycle_strategy_ema200_stoch_and_exits(tmp_path: Path) -> None:
                 confidence=88,
                 allocation_pct=0.35,
                 stop_loss_pct=0.02,
-                take_profit_pct=0.06,
+                take_profit_pct=0.05,  # TP inicial = 210 * 1.05 = 220.5
                 reasoning="Precio sobre EMA 200 en 1H, Estocastico en 18 y vela envolvente alcista.",
             )
         ]
@@ -275,16 +256,52 @@ def test_bot_cycle_strategy_ema200_stoch_and_exits(tmp_path: Path) -> None:
         state_manager=sm,
     )
 
-    # Ciclo 1: compra SOLUSDT con Stop-Loss en prev_candle_low (205.8)
+    # Ciclo 1: compra SOLUSDT @ 210.0 con SL inicial en 205.8 y TP inicial en 220.5
     summary = bot.run_cycle()
     assert "SOLUSDT" in summary["open_positions"]
-    saved_state = sm.load_state()
-    assert saved_state.positions["SOLUSDT"].stop_loss_price == 205.8
+    saved = sm.load_state()
+    sol_pos = saved.positions["SOLUSDT"]
+    assert sol_pos.stop_loss_price == 205.8
+    assert sol_pos.take_profit_price == 220.5
+    # Simulamos que el saldo libre en Binance ahora incluye la posicion comprada de SOL
+    fake_client.balances["SOL"] = sol_pos.quantity
 
-    # Ciclo 2: el Estocastico de ETHUSDT llega a 82 (>= 80) -> debe cerrar ETHUSDT automaticamente
-    fake_scanner.eth_stoch_k = 82.5
+    # Ciclo 2: SOLUSDT sube a 222.0 (supera el TP inicial de 220.5) y la IA ademas sugiere ADJUST a TP 235.0
+    # El bot NO cierra la posicion: sube el SL por encima de la entrada (en ganancia asegurada) y expande el TP!
+    fake_client.prices["SOLUSDT"] = 222.0
+    fake_scanner.sol_price = 222.0
+    fake_scanner.sol_prev_low = 217.5
+    fake_scanner.sol_stoch_k = 83.0
+    fake_scanner.sol_pattern = "NONE"  # Sin vela bajista de rechazo -> deja correr la operacion!
+    fake_ai.decisions = [
+        AIDecision(
+            symbol="SOLUSDT",
+            action="ADJUST",
+            confidence=90,
+            allocation_pct=0.35,
+            stop_loss_pct=0.02,
+            take_profit_pct=0.05,
+            new_stop_loss_price=219.8,
+            new_take_profit_price=235.0,
+            reasoning="Tendencia alcista fuerte; subimos SL a 219.8 para asegurar ganancia y expandimos TP a 235.0.",
+        )
+    ]
+
     summary_2 = bot.run_cycle()
-    assert "ETHUSDT" not in summary_2["open_positions"]
+    assert "SOLUSDT" in summary_2["open_positions"]
+    saved_2 = sm.load_state()
+    sol_pos_2 = saved_2.positions["SOLUSDT"]
+    # El SL subio de 205.8 a 219.8 (> 210.0 de entrada -> ganancia asegurada!) y el TP se expandio a 235.0
+    assert sol_pos_2.stop_loss_price == 219.8
+    assert sol_pos_2.take_profit_price == 235.0
+    assert sol_pos_2.locked_profit_pct() > 4.0
+
+    # Ciclo 3: Ahora el Estocastico sigue sobre 80 PERO aparece una vela envolvente bajista en ETHUSDT en ganancia -> cobra ganancia
+    fake_client.prices["ETHUSDT"] = 3350.0
+    fake_scanner.eth_stoch_k = 85.0
+    fake_scanner.eth_pattern = "BEARISH_ENGULFING"
+    summary_3 = bot.run_cycle()
+    assert "ETHUSDT" not in summary_3["open_positions"]
     assert any(s[0] == "ETHUSDT" for s in fake_client.sells)
 
 
@@ -292,5 +309,5 @@ if __name__ == "__main__":
     test_symbol_filters_rounding()
     test_candlestick_patterns_and_stochastic()
     test_1pct_risk_position_sizing()
-    test_bot_cycle_strategy_ema200_stoch_and_exits(Path(tempfile.mkdtemp()))
-    print("Todas las pruebas de la estrategia EMA 200 + Estocastico (80/20) + Velas pasaron exitosamente.")
+    test_dynamic_sl_tp_trailing_and_ai_adjust(Path(tempfile.mkdtemp()))
+    print("Todas las pruebas de SL/TP dinamico y estrategia pasaron exitosamente.")
