@@ -52,7 +52,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           BINANCE_PROXY_URL: ${{ secrets.BINANCE_PROXY_URL }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || vars.DRY_RUN || 'false' }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.8-flash' }}
           MAX_OPEN_POSITIONS: ${{ vars.MAX_OPEN_POSITIONS || '3' }}
           MAX_POSITION_PCT: ${{ vars.MAX_POSITION_PCT || '0.25' }}
           STOP_LOSS_PCT: ${{ vars.STOP_LOSS_PCT || '0.035' }}

@@ -55,7 +55,7 @@ class BotConfig:
 
     # Modo de ejecucion (False = Cuenta Real Live por defecto)
     dry_run: bool = field(default_factory=lambda: _env_bool("DRY_RUN", False))
-    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash")
+    gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash")
 
     # Parametros de cartera y gestion de riesgo estricta
     quote_asset: str = field(default_factory=lambda: os.getenv("QUOTE_ASSET", "USDT").strip().upper() or "USDT")

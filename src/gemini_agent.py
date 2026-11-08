@@ -71,9 +71,9 @@ REGLAS ESTRICTAS DE OPERACION:
 class GeminiTradingAgent:
     """Agente de IA impulsado por Google Gemini para analisis cuantitativo y toma de decisiones."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash", timeout: int = 40) -> None:
+    def __init__(self, api_key: str, model: str = "gemini-3.8-flash", timeout: int = 45) -> None:
         self.api_key = api_key.strip()
-        self.model = model.strip() or "gemini-2.5-flash"
+        self.model = model.strip() or "gemini-3.8-flash"
         self.timeout = timeout
 
     def analyze_market(
@@ -140,23 +140,19 @@ class GeminiTradingAgent:
         )
 
     def _call_gemini(self, user_prompt: str) -> str:
-        # Intenta primero con el SDK oficial google-genai y cae a REST directo si falla
+        # Intenta primero con el SDK oficial google-genai (Interactions API) y cae a REST directo si no esta instalado
         try:
             from google import genai
-            from google.genai import types
 
             client = genai.Client(api_key=self.api_key)
-            response = client.models.generate_content(
+            interaction = client.interactions.create(
                 model=self.model,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    temperature=0.15,
-                    response_mime_type="application/json",
-                ),
+                input=user_prompt,
+                system_instruction=SYSTEM_INSTRUCTION,
+                response_mime_type="application/json",
             )
-            if response and response.text:
-                return response.text
+            if interaction and getattr(interaction, "output_text", None):
+                return interaction.output_text
         except ImportError:
             logger.debug("SDK google-genai no disponible, usando llamada REST directa.")
         except Exception as exc:
