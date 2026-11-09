@@ -1,7 +1,7 @@
 # Reporte Autonomo - Estrategia EMA 200 + Estocastico (80/20) + SL/TP Dinamico (1H)
 
-- **Ultima actualizacion (UTC):** `2026-11-09T03:02:26Z`
-- **Ciclo de ejecucion:** `#5`
+- **Ultima actualizacion (UTC):** `2026-11-09T07:17:13Z`
+- **Ciclo de ejecucion:** `#6`
 - **Modo:** `CUENTA REAL (LIVE)`
 - **Temporalidad:** `1h` | **Riesgo Inicial:** `1.0% (min $1.00 USD)`
 - **Capital Total Estimado:** `14.00 USDT`
@@ -10,7 +10,7 @@
 - **Regimen de Mercado (Gemini 3.8 Flash):** `BEARISH`
 
 ## Lectura de Mercado de Gemini AI
-> El mercado se encuentra mayoritariamente bajo la EMA de 200 en temporalidad de 1H, reflejando una tendencia bajista generalizada. No se cumplen todas las condiciones estrictas de compra (precio actual por encima de la EMA 200 y confirmación alcista tras sobreventa en el estocástico) para los principales candidatos. PEPEUSDT muestra sobrecompra en el estocástico pero no hay posiciones abiertas previas que gestionar. Por lo tanto, se emite HOLD para todos los activos evaluados.
+> El mercado se encuentra mayoritariamente bajista con la gran mayoría de los activos cotizando por debajo de la EMA de 200 periodos. No se cumplen las condiciones óptimas de entrada alcista (precio sobre EMA 200 con patrón de giro tras sobreventa). HotUSDT muestra sobrecompra en el estocástico pero al no tener posiciones abiertas previas, y el resto de activos sin setups válidos de compra, se emiten decisiones de HOLD.
 
 ## Posiciones Abiertas (Con Stop-Loss y Take-Profit Dinamicos)
 _No hay posiciones abiertas en este momento._
@@ -21,15 +21,15 @@ _Ninguna orden o ajuste ejecutado en este ciclo._
 ## Escaneo 1H: EMA 200 + Estocastico (20/80) + Patrones de Vela
 | Par | Precio | EMA 200 | Posicion EMA | Estocastico (%K / %D) | Patron de Vela (1H) | SL Vela Previa | Setup | Decision IA |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `ETHUSDT` | 2148.29 | 2263.504559 | BAJO EMA 200 (Baja) | `46.32` / `44.55` | `BEARISH_SHOOTING_STAR` | 2160.5 | `WATCH` | **HOLD** (90%) |
-| `BTCUSDT` | 75277.02 | 77037.39439 | BAJO EMA 200 (Baja) | `65.15` / `62.5` | `BULLISH_ENGULFING` | 75599.22 | `WATCH` | **HOLD** (85%) |
-| `ONEUSDT` | 0.001693 | 0.001492 | SOBRE EMA 200 (Alza) | `22.45` / `24.67` | `BEARISH_SHOOTING_STAR` | 0.001685 | `WATCH` | **HOLD** (80%) |
-| `XRPUSDT` | 1.1151 | 1.214485 | BAJO EMA 200 (Baja) | `28.55` / `28.43` | `BEARISH_SHOOTING_STAR` | 1.1264 | `WATCH` | **HOLD** (90%) |
-| `PEPEUSDT` | 5.12e-06 | 5e-06 | SOBRE EMA 200 (Alza) | `83.76` / `79.98` | `NONE` | 5.02e-06 | `EXIT_LONG_STOCH_80` | **HOLD** (85%) |
-| `SOLUSDT` | 88.05 | 92.092822 | BAJO EMA 200 (Baja) | `58.92` / `53.42` | `BEARISH_SHOOTING_STAR` | 88.46 | `WATCH` | **HOLD** (90%) |
-| `ZECUSDT` | 1237.26 | 1265.670814 | BAJO EMA 200 (Baja) | `53.57` / `49.39` | `BEARISH_SHOOTING_STAR` | 1249.69 | `WATCH` | **HOLD** (90%) |
-| `NEARUSDT` | 3.632 | 3.877343 | BAJO EMA 200 (Baja) | `63.55` / `60.42` | `BULLISH_ENGULFING` | 3.659 | `WATCH` | **HOLD** (85%) |
-| `BNBUSDT` | 690.06 | 703.211356 | BAJO EMA 200 (Baja) | `51.72` / `47.28` | `BULLISH_ENGULFING` | 691.81 | `WATCH` | **HOLD** (88%) |
-| `HYPEUSDT` | 74.92 | 80.569181 | BAJO EMA 200 (Baja) | `26.36` / `25.07` | `BEARISH_SHOOTING_STAR` | 75.38 | `WATCH` | **HOLD** (90%) |
-| `DOGEUSDT` | 0.07002 | 0.073446 | BAJO EMA 200 (Baja) | `61.07` / `55.56` | `BEARISH_SHOOTING_STAR` | 0.07029 | `WATCH` | **HOLD** (90%) |
-| `UNIUSDT` | 6.953 | 7.089047 | BAJO EMA 200 (Baja) | `76.14` / `69.47` | `NONE` | 6.991 | `WATCH` | **HOLD** (88%) |
+| `ETHUSDT` | 2088.02 | 2257.957612 | BAJO EMA 200 (Baja) | `27.81` / `35.42` | `NONE` | 2140.97 | `WATCH` | **HOLD** (85%) |
+| `ONEUSDT` | 0.001616 | 0.0015 | SOBRE EMA 200 (Alza) | `5.9` / `8.35` | `BEARISH_SHOOTING_STAR` | 0.001605 | `EXIT_SHORT_STOCH_20` | **HOLD** (85%) |
+| `BTCUSDT` | 73957.35 | 76928.111952 | BAJO EMA 200 (Baja) | `29.25` / `38.63` | `BULLISH_HAMMER` | 74818.0 | `WATCH` | **HOLD** (85%) |
+| `HOTUSDT` | 0.00047 | 0.000402 | SOBRE EMA 200 (Alza) | `80.46` / `74.5` | `BULLISH_ENGULFING` | 0.000417 | `EXIT_LONG_STOCH_80` | **HOLD** (80%) |
+| `XRPUSDT` | 1.086 | 1.209575 | BAJO EMA 200 (Baja) | `5.53` / `10.34` | `NONE` | 1.1083 | `EXIT_SHORT_STOCH_20` | **HOLD** (85%) |
+| `ZECUSDT` | 1204.2 | 1265.563926 | BAJO EMA 200 (Baja) | `34.81` / `42.93` | `NONE` | 1234.79 | `WATCH` | **HOLD** (85%) |
+| `SOLUSDT` | 85.37 | 91.884628 | BAJO EMA 200 (Baja) | `19.91` / `32.07` | `NONE` | 87.41 | `EXIT_SHORT_STOCH_20` | **HOLD** (85%) |
+| `BMTUSDT` | 0.02315 | 0.02468 | BAJO EMA 200 (Baja) | `9.33` / `19.23` | `NONE` | 0.02469 | `EXIT_SHORT_STOCH_20` | **HOLD** (85%) |
+| `NEARUSDT` | 3.493 | 3.872109 | BAJO EMA 200 (Baja) | `32.01` / `43.17` | `NONE` | 3.608 | `WATCH` | **HOLD** (85%) |
+| `BNBUSDT` | 676.67 | 701.571935 | BAJO EMA 200 (Baja) | `17.91` / `30.3` | `NONE` | 688.67 | `EXIT_SHORT_STOCH_20` | **HOLD** (85%) |
+| `UNIUSDT` | 6.678 | 7.091648 | BAJO EMA 200 (Baja) | `30.62` / `47.67` | `NONE` | 6.911 | `WATCH` | **HOLD** (85%) |
+| `SOXLBUSDT` | 43.34 | 58.963255 | BAJO EMA 200 (Baja) | `31.31` / `44.98` | `NONE` | 45.74 | `WATCH` | **HOLD** (85%) |
