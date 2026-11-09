@@ -1,23 +1,8 @@
 {
-  "updated_at": "2026-11-08T23:48:05Z",
-  "daily_date": "2026-11-08",
-  "daily_start_equity_usdt": 1000.0,
-  "last_equity_usdt": 1000.0,
+  "updated_at": "2026-11-09T00:17:58Z",
+  "daily_date": "2026-11-09",
+  "daily_start_equity_usdt": 14.0,
+  "last_equity_usdt": 14.0,
   "total_cycles": 1,
-  "positions": {
-    "ONEUSDT": {
-      "symbol": "ONEUSDT",
-      "base_asset": "ONE",
-      "quantity": 91334.8,
-      "entry_price": 0.001708,
-      "highest_price": 0.001708,
-      "stop_loss_price": 0.001606,
-      "take_profit_price": 0.00191296,
-      "opened_at": "2026-11-08T23:48:05Z",
-      "entry_reason": "Estrategia EMA200+Stoch (BULLISH_ENGULFING, Stoch %K=14.82, Riesgo ~$10.0 USD / 1%): Cumple estrictamente la estrategia: precio actual por encima de la EMA 200, estocastico k en zona de sobreventa (14.82) tras retroceso, y formacion de patron de vela Envolvente Alcista. Stop-loss inicial fijado en el bajo de la vela previa (0.001606).",
-      "initial_stop_loss_price": 0.001606,
-      "sl_adjustments_count": 0,
-      "last_adjustment_reason": ""
-    }
-  }
+  "positions": {}
 }

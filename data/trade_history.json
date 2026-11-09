@@ -1,14 +1,1 @@
-[
-  {
-    "timestamp": "2026-11-08T23:48:05Z",
-    "symbol": "ONEUSDT",
-    "side": "BUY",
-    "mode": "DRY_RUN",
-    "quantity": 91334.8,
-    "price": 0.001708,
-    "quote_qty": 156.0,
-    "stop_loss_price": 0.001606,
-    "take_profit_price": 0.00191296,
-    "reason": "Estrategia EMA200+Stoch (BULLISH_ENGULFING, Stoch %K=14.82, Riesgo ~$10.0 USD / 1%): Cumple estrictamente la estrategia: precio actual por encima de la EMA 200, estocastico k en zona de sobreventa (14.82) tras retroceso, y formacion de patron de vela Envolvente Alcista. Stop-loss inicial fijado en el bajo de la vela previa (0.001606)."
-  }
-]
+[]

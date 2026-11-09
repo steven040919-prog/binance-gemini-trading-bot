@@ -75,9 +75,9 @@ class BotConfig:
     risk_per_trade_pct: float = field(default_factory=lambda: _env_float("RISK_PER_TRADE_PCT", 0.01))
     min_risk_usd: float = field(default_factory=lambda: _env_float("MIN_RISK_USD", 1.0))
     max_open_positions: int = field(default_factory=lambda: _env_int("MAX_OPEN_POSITIONS", 3))
-    max_position_pct: float = field(default_factory=lambda: _env_float("MAX_POSITION_PCT", 0.35))
-    min_order_usdt: float = field(default_factory=lambda: _env_float("MIN_ORDER_USDT", 1.0))
-    min_usdt_reserve: float = field(default_factory=lambda: _env_float("MIN_USDT_RESERVE", 1.0))
+    max_position_pct: float = field(default_factory=lambda: _env_float("MAX_POSITION_PCT", 0.50))
+    min_order_usdt: float = field(default_factory=lambda: _env_float("MIN_ORDER_USDT", 5.5))
+    min_usdt_reserve: float = field(default_factory=lambda: _env_float("MIN_USDT_RESERVE", 0.5))
 
     # Respaldo de Stop-Loss/Take-Profit si no hay vela previa
     stop_loss_pct: float = field(default_factory=lambda: _env_float("STOP_LOSS_PCT", 0.025))

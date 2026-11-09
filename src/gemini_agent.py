@@ -188,6 +188,7 @@ class GeminiTradingAgent:
                 "generationConfig": {
                     "temperature": 0.1,
                     "responseMimeType": "application/json",
+                    "thinkingConfig": {"thinkingBudget": 512},
                 },
             }
             try:
@@ -195,7 +196,7 @@ class GeminiTradingAgent:
                     url,
                     params={"key": self.api_key},
                     json=payload,
-                    timeout=self.timeout,
+                    timeout=35,
                 )
                 if resp.status_code >= 400:
                     last_err = RuntimeError(f"Error en Gemini API ({mdl}, HTTP {resp.status_code}): {resp.text[:250]}")

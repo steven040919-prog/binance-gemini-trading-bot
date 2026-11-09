@@ -34,9 +34,11 @@ def calculate_position_size_1pct_risk(
     effective_sl_pct = max(sl_distance_pct, 0.0025)
 
     ideal_notional_usdt = risk_usd / effective_sl_pct
-    max_allowed_usdt = min(available_usdt, max(total_equity_usdt * max_position_pct, min_risk_usd))
+    max_allowed_usdt = min(available_usdt, max(total_equity_usdt * max_position_pct, min_risk_usd, 5.5))
     final_usdt = min(ideal_notional_usdt, max_allowed_usdt)
-    if final_usdt < min_risk_usd and available_usdt >= min_risk_usd:
+    if final_usdt < 5.5 and available_usdt >= 5.5:
+        final_usdt = 5.5
+    elif final_usdt < min_risk_usd and available_usdt >= min_risk_usd:
         final_usdt = min_risk_usd
 
     return round(final_usdt, 2), round(risk_usd, 2)
@@ -119,6 +121,17 @@ class AutonomousTradingBot:
         else:
             try:
                 balances = self.client.get_account_balances()
+                # Si la cuenta tiene saldo en USD (>= 5.0) y estamos operando contra USDT, lo convierte automaticamente
+                usd_bal = float(balances.get("USD", 0.0))
+                usdt_bal = float(balances.get("USDT", 0.0))
+                if self.config.quote_asset == "USDT" and usd_bal >= 5.0 and not self._effective_dry_run:
+                    logger.info("Detectado saldo de %.2f USD en Spot. Convirtiendo automaticamente a USDT via par USDTUSD...", usd_bal)
+                    try:
+                        conv_order = self.client.place_market_buy_usdt("USDTUSD", usdt_amount=usd_bal, dry_run=False)
+                        logger.info("Conversion USD -> USDT completada: %s", conv_order.get("executedQty"))
+                        balances = self.client.get_account_balances()
+                    except Exception as conv_exc:
+                        logger.warning("No se pudo convertir USD a USDT automaticamente: %s", conv_exc)
             except BinanceAPIError as exc:
                 if exc.status_code == 451:
                     logger.warning(

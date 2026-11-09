@@ -10,6 +10,7 @@ from src.binance_client import BinanceSpotClient
 logger = logging.getLogger(__name__)
 
 EXCLUDED_BASE_ASSETS = {
+    "USD",
     "USDC",
     "FDUSD",
     "TUSD",
