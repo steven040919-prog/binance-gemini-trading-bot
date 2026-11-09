@@ -75,22 +75,22 @@ class BotConfig:
     risk_per_trade_pct: float = field(default_factory=lambda: _env_float("RISK_PER_TRADE_PCT", 0.01))
     min_risk_usd: float = field(default_factory=lambda: _env_float("MIN_RISK_USD", 1.0))
     max_open_positions: int = field(default_factory=lambda: _env_int("MAX_OPEN_POSITIONS", 3))
-    max_position_pct: float = field(default_factory=lambda: _env_float("MAX_POSITION_PCT", 0.50))
+    max_position_pct: float = field(default_factory=lambda: _env_float("MAX_POSITION_PCT", 0.85))
     min_order_usdt: float = field(default_factory=lambda: _env_float("MIN_ORDER_USDT", 5.5))
     min_usdt_reserve: float = field(default_factory=lambda: _env_float("MIN_USDT_RESERVE", 0.5))
 
     # Respaldo de Stop-Loss/Take-Profit si no hay vela previa
-    stop_loss_pct: float = field(default_factory=lambda: _env_float("STOP_LOSS_PCT", 0.025))
-    take_profit_pct: float = field(default_factory=lambda: _env_float("TAKE_PROFIT_PCT", 0.060))
+    stop_loss_pct: float = field(default_factory=lambda: _env_float("STOP_LOSS_PCT", 0.032))
+    take_profit_pct: float = field(default_factory=lambda: _env_float("TAKE_PROFIT_PCT", 0.065))
     trailing_stop_pct: float = field(default_factory=lambda: _env_float("TRAILING_STOP_PCT", 0.025))
-    trailing_activation_pct: float = field(default_factory=lambda: _env_float("TRAILING_ACTIVATION_PCT", 0.035))
+    trailing_activation_pct: float = field(default_factory=lambda: _env_float("TRAILING_ACTIVATION_PCT", 0.032))
 
     # Cortacircuitos diario
     max_daily_drawdown_pct: float = field(default_factory=lambda: _env_float("MAX_DAILY_DRAWDOWN_PCT", 0.050))
 
     # Escaneo dinamico
-    top_candidates_limit: int = field(default_factory=lambda: _env_int("TOP_CANDIDATES_LIMIT", 12))
-    min_24h_volume_usdt: float = field(default_factory=lambda: _env_float("MIN_24H_VOLUME_USDT", 10_000_000.0))
+    top_candidates_limit: int = field(default_factory=lambda: _env_int("TOP_CANDIDATES_LIMIT", 16))
+    min_24h_volume_usdt: float = field(default_factory=lambda: _env_float("MIN_24H_VOLUME_USDT", 8_000_000.0))
     min_ai_confidence: int = field(default_factory=lambda: _env_int("MIN_AI_CONFIDENCE", 70))
 
     # Rutas de persistencia en el repositorio

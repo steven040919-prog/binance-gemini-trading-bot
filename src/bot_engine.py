@@ -234,7 +234,13 @@ class AutonomousTradingBot:
                     continue
 
                 has_institutional_pillar = snap is not None and (
-                    snap.entry_pillar in ("P1_EMA200_PULLBACK", "P2_EXTREME_CAPITULATION", "P3_BULLISH_DIVERGENCE_SPRING")
+                    snap.entry_pillar
+                    in (
+                        "P1_EMA200_PULLBACK",
+                        "P2_EXTREME_CAPITULATION",
+                        "P3_BULLISH_DIVERGENCE_SPRING",
+                        "P4_STRONG_TREND_EMA50_CONTINUATION",
+                    )
                     or snap.strategy_setup == "LONG_ENTRY"
                 )
                 if snap is not None and (not snap.above_ema_200) and (not has_institutional_pillar):
@@ -257,6 +263,22 @@ class AutonomousTradingBot:
                 if available_to_invest < self.config.min_order_usdt:
                     break
 
+                # Asignacion Dinamica por Conviccion (85% en Pilares Tier-1 P2/P3/P4 con >81% WR; 65% en P1)
+                conviction_cap = (
+                    0.85
+                    if (
+                        snap is not None
+                        and snap.entry_pillar
+                        in (
+                            "P2_EXTREME_CAPITULATION",
+                            "P3_BULLISH_DIVERGENCE_SPRING",
+                            "P4_STRONG_TREND_EMA50_CONTINUATION",
+                        )
+                    )
+                    else 0.65
+                )
+                effective_max_pos_pct = min(self.config.max_position_pct, max(dec.allocation_pct, conviction_cap))
+
                 order_usdt, risk_usd = calculate_position_size_1pct_risk(
                     total_equity_usdt=total_equity,
                     available_usdt=available_to_invest,
@@ -264,7 +286,7 @@ class AutonomousTradingBot:
                     stop_loss_price=structural_sl,
                     risk_pct=self.config.risk_per_trade_pct,
                     min_risk_usd=self.config.min_risk_usd,
-                    max_position_pct=min(dec.allocation_pct, self.config.max_position_pct),
+                    max_position_pct=effective_max_pos_pct,
                 )
 
                 if order_usdt < self.config.min_order_usdt:
@@ -478,9 +500,14 @@ class AutonomousTradingBot:
                         candidate_sl = round(snap.prev_candle_low, 8)
                         reasons_list.append(f"Bajo vela previa 1H ({snap.prev_candle_low})")
 
-                # 3c. Si lleva >= 2.0% de ganancia o >= 1.5R: asegurar entre 60% y 76% del recorrido desde la entrada hasta el pico
+                # 3c. Si lleva >= 2.0% de ganancia o >= 1.5R: asegurar entre 60%, 76% y 80% del recorrido desde la entrada hasta el pico
                 if pnl_pct >= 2.0 or r_mult >= 1.5:
-                    keep_ratio = 0.76 if pnl_pct >= 3.2 else 0.60
+                    if pnl_pct >= 5.5:
+                        keep_ratio = 0.80
+                    elif pnl_pct >= 3.2:
+                        keep_ratio = 0.76
+                    else:
+                        keep_ratio = 0.60
                     profit_span = pos.highest_price - pos.entry_price
                     lock_peak_sl = round(pos.entry_price + (profit_span * keep_ratio), 8)
                     if lock_peak_sl > candidate_sl and lock_peak_sl < cur_price * 0.996:

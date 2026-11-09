@@ -347,8 +347,14 @@ class MarketScanner:
                 continue
 
             vol_score = math.log10(max(quote_vol, 1.0)) * 10.0
-            momentum_score = min(abs(pct_change), 18.0) * 1.2
-            total_score = vol_score + momentum_score
+            momentum_score = min(abs(pct_change), 18.0) * 0.8
+            # Bono de Oportunidad Cuantitativa: prioriza pares liquidos que estan en retroceso cerca del soporte de 24h (donde se activan P1/P2/P3/P4)
+            high_24 = float(t.get("highPrice", last_price))
+            low_24 = float(t.get("lowPrice", last_price))
+            rng_24 = high_24 - low_24
+            range_pos = ((last_price - low_24) / rng_24) if rng_24 > 0 else 0.5
+            pullback_bonus = 18.0 if (range_pos <= 0.28 and -18.0 <= pct_change <= 6.0) else 0.0
+            total_score = vol_score + momentum_score + pullback_bonus
             scored.append((total_score, t))
 
         scored.sort(key=lambda item: item[0], reverse=True)
@@ -501,7 +507,7 @@ class MarketScanner:
                 ):
                     entry_pillar = "P2_EXTREME_CAPITULATION"
 
-                # PILAR 3: Spring / Divergencia Alcista Institucional en Soporte 12H (83.3% WR, PF 3.51)
+                # PILAR 3: Spring / Divergencia Alcista Institucional en Soporte 12H (83.3% WR, PF 3.54)
                 elif (
                     bullish_divergence
                     and min_recent_bb <= 0.08
@@ -513,6 +519,23 @@ class MarketScanner:
                     and vol_ratio >= 1.05
                 ):
                     entry_pillar = "P3_BULLISH_DIVERGENCE_SPRING"
+
+                # PILAR 4: Continuacion de Tendencia Alcista Fuerte en EMA 50 (87.5% WR, PF 2.70)
+                elif (
+                    current_price > ema_200 * 1.01
+                    and ema_50 > ema_200 * 1.005
+                    and ema_200_slope_pct >= 0.0
+                    and -1.2 <= (((current_price - ema_50) / ema_50) * 100.0) <= 1.5
+                    and stoch_recent_min <= self.stoch_oversold
+                    and min_recent_rsi <= 38.0
+                    and min_recent_bb <= 0.10
+                    and stoch_turning_up
+                    and macd_improving
+                    and is_bull_candle
+                    and is_bull_pattern
+                    and vol_ratio >= 1.05
+                ):
+                    entry_pillar = "P4_STRONG_TREND_EMA50_CONTINUATION"
 
                 is_oversold_zone = (stoch_k <= self.stoch_oversold) or (stoch_recent_min <= self.stoch_oversold and stoch_k <= 35.0)
                 is_overbought_zone = (stoch_k >= self.stoch_overbought) or (stoch_recent_max >= self.stoch_overbought and stoch_k >= 65.0)
