@@ -233,16 +233,22 @@ class AutonomousTradingBot:
                 if price <= 0:
                     continue
 
-                if snap is not None and not snap.above_ema_200:
+                has_institutional_pillar = snap is not None and (
+                    snap.entry_pillar in ("P1_EMA200_PULLBACK", "P2_EXTREME_CAPITULATION", "P3_BULLISH_DIVERGENCE_SPRING")
+                    or snap.strategy_setup == "LONG_ENTRY"
+                )
+                if snap is not None and (not snap.above_ema_200) and (not has_institutional_pillar):
                     logger.info(
-                        "Omitiendo BUY en %s porque el precio (%.6f) esta por debajo de la EMA 200 (%.6f).",
+                        "Omitiendo BUY en %s porque el precio (%.6f) esta bajo EMA 200 (%.6f) sin Pilar Institucional.",
                         dec.symbol,
                         price,
                         snap.ema_200,
                     )
                     continue
 
-                if snap is not None and 0 < snap.prev_candle_low < price:
+                if snap is not None and 0 < snap.structural_sl_price < price:
+                    structural_sl = snap.structural_sl_price
+                elif snap is not None and 0 < snap.prev_candle_low < price:
                     structural_sl = snap.prev_candle_low
                 else:
                     structural_sl = round(price * (1.0 - dec.stop_loss_pct), 6)
@@ -438,6 +444,18 @@ class AutonomousTradingBot:
                     actions.append(trade)
                 continue
 
+            # 2b. Cosecha por Tiempo (Time-Profit Harvest 36h del Backtest de 6 Meses):
+            #     Si lleva >= 36h abierta, esta en ganancia neta (>= +0.6%) y el Estocastico ya subio a >= 72, cosecha ganancia
+            if pos.hours_open() >= 36.0 and pnl_pct >= 0.6 and snap is not None and snap.stoch_k >= 72.0:
+                reason = (
+                    f"COSECHA CUANTITATIVA 36H (Horas={pos.hours_open():.1f}h, Stoch %K={snap.stoch_k}, PnL {pnl_pct:+.2f}%)"
+                )
+                logger.info("Cerrando posicion por Time-Profit Harvest en %s: %s", sym, reason)
+                trade = self._execute_sell(state, sym, cur_price, reason=reason)
+                if trade:
+                    actions.append(trade)
+                continue
+
             # 3. GESTION DINAMICA ("DEJAR CORRER LA GANANCIA"): Mover SL y TP hacia arriba en operaciones ganadoras
             if pnl_pct > 0:
                 old_sl = pos.stop_loss_price
@@ -446,12 +464,13 @@ class AutonomousTradingBot:
                 candidate_tp = old_tp
                 reasons_list: list[str] = []
 
-                # 3a. Al llegar a >= 1R o >= +1.2% de ganancia: subir SL a Break-Even + 0.3% de ganancia asegurada
+                # 3a. Al llegar a >= 1R o >= +1.2% de ganancia: subir SL a Break-Even + ganancia asegurada (+0.3% a +0.9%)
                 if r_mult >= 1.0 or pnl_pct >= 1.2:
-                    be_plus = round(pos.entry_price * 1.003, 8)
+                    lock_pct = 0.009 if pnl_pct >= 2.2 else 0.003
+                    be_plus = round(pos.entry_price * (1.0 + lock_pct), 8)
                     if be_plus > candidate_sl and be_plus < cur_price * 0.996:
                         candidate_sl = be_plus
-                        reasons_list.append("Break-Even+0.3%")
+                        reasons_list.append(f"Break-Even+{lock_pct * 100:.1f}%")
 
                 # 3b. Trailing estructural por el bajo de la vela anterior de 1H (`prev_candle_low`)
                 if snap is not None and snap.prev_candle_low > pos.entry_price:
@@ -459,13 +478,14 @@ class AutonomousTradingBot:
                         candidate_sl = round(snap.prev_candle_low, 8)
                         reasons_list.append(f"Bajo vela previa 1H ({snap.prev_candle_low})")
 
-                # 3c. Si lleva >= 2.0% de ganancia o >= 1.5R: asegurar al menos el 60% del recorrido desde la entrada hasta el pico
+                # 3c. Si lleva >= 2.0% de ganancia o >= 1.5R: asegurar entre 60% y 76% del recorrido desde la entrada hasta el pico
                 if pnl_pct >= 2.0 or r_mult >= 1.5:
+                    keep_ratio = 0.76 if pnl_pct >= 3.2 else 0.60
                     profit_span = pos.highest_price - pos.entry_price
-                    lock_60_sl = round(pos.entry_price + (profit_span * 0.60), 8)
-                    if lock_60_sl > candidate_sl and lock_60_sl < cur_price * 0.996:
-                        candidate_sl = lock_60_sl
-                        reasons_list.append("Asegurar 60% del pico")
+                    lock_peak_sl = round(pos.entry_price + (profit_span * keep_ratio), 8)
+                    if lock_peak_sl > candidate_sl and lock_peak_sl < cur_price * 0.996:
+                        candidate_sl = lock_peak_sl
+                        reasons_list.append(f"Asegurar {int(keep_ratio * 100)}% del pico")
 
                 # 3d. Si el Estocastico llega a >= 80 pero la tendencia sigue alcista (sin vela bajista),
                 #     NO cerramos la operacion: apretamos el SL asegurando el 75% de la ganancia y subimos el TP para dejarla correr!
@@ -769,19 +789,20 @@ class AutonomousTradingBot:
         lines.extend(
             [
                 "",
-                "## Escaneo 1H: EMA 200 + Estocastico (20/80) + Patrones de Vela",
-                "| Par | Precio | EMA 200 | Posicion EMA | Estocastico (%K / %D) | Patron de Vela (1H) | SL Vela Previa | Setup | Decision IA |",
-                "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                "## Escaneo Cuantitativo 1H (3 Pilares Optimizados 6M: EMA 200 Pullback + Capitulacion Extrema + Divergencia Spring)",
+                "| Par | Precio | EMA 200 | Dist EMA | Estocastico (%K / %D) | RSI(14) | BB %B | Vela (1H) | SL (ATR) | Pilar / Setup | Decision IA |",
+                "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
             ]
         )
         dec_map = {d.symbol: d for d in ai_result.decisions}
         for s in snapshots:
             d = dec_map.get(s.symbol)
             act = f"**{d.action}** ({d.confidence}%)" if d else "HOLD"
-            ema_pos = "SOBRE EMA 200 (Alza)" if s.above_ema_200 else "BAJO EMA 200 (Baja)"
-            sl_ref = s.prev_candle_low if s.above_ema_200 else s.prev_candle_high
+            ema_pos = f"`{s.dist_to_ema200_pct:+.2f}%`"
+            sl_ref = s.structural_sl_price if s.structural_sl_price > 0 else s.prev_candle_low
+            pillar_str = s.entry_pillar if s.entry_pillar != "NONE" else s.strategy_setup
             lines.append(
-                f"| `{s.symbol}` | {s.current_price} | {s.ema_200} | {ema_pos} | `{s.stoch_k}` / `{s.stoch_d}` | `{s.candle_pattern}` | {sl_ref} | `{s.strategy_setup}` | {act} |"
+                f"| `{s.symbol}` | {s.current_price} | {s.ema_200} | {ema_pos} | `{s.stoch_k}` / `{s.stoch_d}` | `{s.rsi_14}` | `{s.bb_pct_b}` | `{s.candle_pattern}` | {sl_ref} | `{pillar_str}` | {act} |"
             )
 
         return "\n".join(lines) + "\n"

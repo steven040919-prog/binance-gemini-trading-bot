@@ -61,6 +61,17 @@ class PositionState:
             return 0.0
         return ((peak - current_price) / peak) * 100.0
 
+    def hours_open(self) -> float:
+        """Retorna las horas transcurridas desde la apertura de la posicion."""
+        if not self.opened_at:
+            return 0.0
+        try:
+            dt = datetime.strptime(self.opened_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            return max(0.0, (now - dt).total_seconds() / 3600.0)
+        except Exception:
+            return 0.0
+
 
 @dataclass
 class BotState:
