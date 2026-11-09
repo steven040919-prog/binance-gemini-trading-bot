@@ -175,9 +175,7 @@ class GeminiTradingAgent:
             )
 
     def _call_gemini(self, user_prompt: str) -> str:
-        models_to_try = [self.model]
-        if "gemini-3.5-flash-lite" not in models_to_try:
-            models_to_try.append("gemini-3.5-flash-lite")
+        models_to_try = [self.model, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 
         last_err: Exception | None = None
         for mdl in models_to_try:
@@ -188,7 +186,6 @@ class GeminiTradingAgent:
                 "generationConfig": {
                     "temperature": 0.1,
                     "responseMimeType": "application/json",
-                    "thinkingConfig": {"thinkingBudget": 512},
                 },
             }
             try:
@@ -196,7 +193,7 @@ class GeminiTradingAgent:
                     url,
                     params={"key": self.api_key},
                     json=payload,
-                    timeout=35,
+                    timeout=50,
                 )
                 if resp.status_code >= 400:
                     last_err = RuntimeError(f"Error en Gemini API ({mdl}, HTTP {resp.status_code}): {resp.text[:250]}")
