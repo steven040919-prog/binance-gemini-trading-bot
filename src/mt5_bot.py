@@ -136,6 +136,20 @@ class ExnessMT5AutonomousBot:
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
 
     def ensure_connected(self) -> tuple[Any, Any]:
+        # Verificar primero que terminal64.exe este abierto en el escritorio del usuario
+        # para que mt5.initialize() no cree un proceso oculto en segundo plano que impida abrir la ventana
+        proc_check = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq terminal64.exe", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if "terminal64.exe" not in (proc_check.stdout or "").lower():
+            raise RuntimeError(
+                "MetaTrader 5 (terminal64.exe) no esta abierto en pantalla. "
+                "Abre la aplicacion MetaTrader 5 en tu escritorio para que el bot se conecte a tu ventana."
+            )
         if not mt5.initialize():
             raise RuntimeError(f"No se pudo inicializar MetaTrader 5: {mt5.last_error()}")
         term = mt5.terminal_info()
@@ -273,7 +287,7 @@ class ExnessMT5AutonomousBot:
                 and has_bullish_trigger
             )
 
-            # Pilar 2 LONG: Capitulacion Institucional / Doble Sobreventa Extrema
+            # Pilar 2 LONG: Capitulacion Institucional / Doble Sobreventa Extrema (Ganadora en ETH hoy +22.6%)
             p2_long = (
                 stoch_recent_min <= 16.0
                 and stoch_k <= 32.0
@@ -297,6 +311,36 @@ class ExnessMT5AutonomousBot:
                 and has_bearish_trigger
             )
 
+            # === ESTRATEGIA ALTA FRECUENCIA 15 MINUTOS (SCALPER M15 MOMENTUM PULLBACK - 507 TRADES 6M) ===
+            c15m = self._fetch_candles(sym, mt5.TIMEFRAME_M15, 60)
+            m15_long = False
+            m15_short = False
+            m15_sl = 0.0
+            if len(c15m) >= 45:
+                closes_15 = [c["close"] for c in c15m]
+                e9_15 = calc_ema_series(closes_15, 9)[-1]
+                e21_15 = calc_ema_series(closes_15, 21)[-1]
+                e50_15 = calc_ema_series(closes_15, 50)[-1]
+                raw_k15, _ = calc_stochastic(c15m, 14, 3, 3)
+                k15 = raw_k15[-1] if raw_k15 else 50.0
+                k15_prev = raw_k15[-2] if len(raw_k15) >= 2 else k15
+                rsi_15 = calc_rsi(closes_15, 14)
+                trs_15 = [max(c15m[k]["high"] - c15m[k]["low"], abs(c15m[k]["high"] - c15m[k - 1]["close"]), abs(c15m[k]["low"] - c15m[k - 1]["close"])) for k in range(len(c15m) - 14, len(c15m))]
+                atr_15 = sum(trs_15) / len(trs_15) if trs_15 else (cur_price * 0.001)
+
+                # Scalper M15 LONG: Tendencia Macro H1 alcista + EMA 9 > 21 > 50 en M15 + Pullback con Estocastico 25-50 girando al alza
+                m15_bull_align = above_ema200 and (e9_15 > e21_15 > e50_15) and cur_price >= e21_15 * 0.9995 and c15m[-1]["low"] <= e9_15 * 1.0003
+                m15_long = m15_bull_align and (25.0 <= k15 <= 52.0) and (k15 > k15_prev) and (48.0 <= rsi_15 <= 64.0) and (c15m[-1]["close"] > c15m[-1]["open"] or candle_pattern in ("BULLISH_HAMMER", "BULLISH_ENGULFING"))
+
+                # Scalper M15 SHORT: Tendencia Macro H1 bajista + EMA 9 < 21 < 50 en M15 + Pullback con Estocastico 50-75 girando a la baja
+                m15_bear_align = (not above_ema200) and (e9_15 < e21_15 < e50_15) and cur_price <= e21_15 * 1.0005 and c15m[-1]["high"] >= e9_15 * 0.9997
+                m15_short = m15_bear_align and (48.0 <= k15 <= 75.0) and (k15 < k15_prev) and (36.0 <= rsi_15 <= 52.0) and (c15m[-1]["close"] < c15m[-1]["open"] or candle_pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING"))
+
+                if m15_long:
+                    m15_sl = round(cur_price - (1.35 * atr_15), info.digits)
+                elif m15_short:
+                    m15_sl = round(float(tick.ask) + (1.35 * atr_15), info.digits)
+
             entry_pillar = "NONE"
             if p1_long:
                 entry_pillar = "P1_EMA200_PULLBACK_LONG"
@@ -307,6 +351,14 @@ class ExnessMT5AutonomousBot:
             elif s1_short:
                 entry_pillar = "S1_EMA200_REJECT_SHORT"
                 setup = "SHORT_ENTRY"
+            elif m15_long:
+                entry_pillar = "M15_SCALPER_PULLBACK_LONG"
+                setup = "LONG_ENTRY"
+                structural_long_sl = m15_sl
+            elif m15_short:
+                entry_pillar = "M15_SCALPER_PULLBACK_SHORT"
+                setup = "SHORT_ENTRY"
+                structural_short_sl = m15_sl
             elif stoch_k >= 80.0 and has_bearish_trigger:
                 setup = "EXIT_LONG"
             elif stoch_k <= 20.0 and has_bullish_trigger:
