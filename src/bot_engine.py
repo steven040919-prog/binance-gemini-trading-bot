@@ -115,15 +115,16 @@ class AutonomousTradingBot:
         # 1. Obtener precios globales (data-api.binance.vision funciona globalmente sin bloqueo)
         all_prices = self.client.get_all_prices()
 
-        # 2. Obtener saldos reales de Binance (con fallback seguro si GitHub Actions topa con HTTP 451 sin proxy)
+        # 2. Obtener saldos reales de Binance Spot + Futuros USDT-M (con fallback seguro si GitHub Actions topa con HTTP 451 sin proxy)
+        futures_usdt = 0.0
         if self._effective_dry_run and not self.config.binance_api_key:
             balances = self._simulated_balances_from_state(state)
         else:
             try:
                 balances = self.client.get_account_balances()
+                futures_usdt = float(getattr(self.client, "get_futures_usdt_balance", lambda: 0.0)())
                 # Si la cuenta tiene saldo en USD (>= 5.0) y estamos operando contra USDT, lo convierte automaticamente
                 usd_bal = float(balances.get("USD", 0.0))
-                usdt_bal = float(balances.get("USDT", 0.0))
                 if self.config.quote_asset == "USDT" and usd_bal >= 5.0 and not self._effective_dry_run:
                     logger.info("Detectado saldo de %.2f USD en Spot. Convirtiendo automaticamente a USDT via par USDTUSD...", usd_bal)
                     try:
@@ -143,8 +144,9 @@ class AutonomousTradingBot:
                 else:
                     raise
 
-        # 3. Reconciliar estado persistido con saldos
-        usdt_free, total_equity = self._reconcile_portfolio(state, balances, all_prices)
+        # 3. Reconciliar estado persistido con saldos (Spot + Futuros USDT-M)
+        spot_usdt_free = float(balances.get(self.config.quote_asset, 0.0))
+        usdt_free, total_equity = self._reconcile_portfolio(state, balances, all_prices, futures_usdt=futures_usdt)
         daily_pnl_pct = self._update_daily_metrics(state, total_equity)
 
         # 4. Escanear el mercado en 1H (EMA 200, Estocastico y Patrones de Velas Martillo/Envolvente)
@@ -206,25 +208,25 @@ class AutonomousTradingBot:
                 if adj_record:
                     executed_actions.append(adj_record)
 
-        # 8. Ejecutar nuevas entradas que cumplan la estrategia EMA 200 + Estocastico <= 20 + Vela Martillo/Envolvente
+        # 8. Ejecutar nuevas entradas que cumplan la estrategia (LONG P1-P4 en Spot/Futuros + SHORT S1 en Futuros USDT-M)
         max_dd_limit_pct = -abs(self.config.max_daily_drawdown_pct * 100.0)
         if daily_pnl_pct <= max_dd_limit_pct:
             logger.warning(
-                "CORTACIRCUITOS DIARIO ACTIVADO (PnL diario %.2f%% <= %.2f%%). Se bloquean compras nuevas hoy.",
+                "CORTACIRCUITOS DIARIO ACTIVADO (PnL diario %.2f%% <= %.2f%%). Se bloquean entradas nuevas hoy.",
                 daily_pnl_pct,
                 max_dd_limit_pct,
             )
         else:
-            buy_decisions = [
+            entry_decisions = [
                 d
                 for d in ai_result.decisions
-                if d.action == "BUY"
+                if d.action in ("BUY", "SHORT")
                 and d.confidence >= self.config.min_ai_confidence
                 and d.symbol not in state.positions
             ]
-            buy_decisions.sort(key=lambda x: x.confidence, reverse=True)
+            entry_decisions.sort(key=lambda x: x.confidence, reverse=True)
 
-            for dec in buy_decisions:
+            for dec in entry_decisions:
                 if len(state.positions) >= self.config.max_open_positions:
                     break
 
@@ -233,6 +235,62 @@ class AutonomousTradingBot:
                 if price <= 0:
                     continue
 
+                if dec.action == "SHORT":
+                    # Entradas SHORT requieren saldo en Futuros USDT-M (o modo simulacion)
+                    if futures_usdt < self.config.min_order_usdt and not self._effective_dry_run:
+                        logger.info(
+                            "Senal SHORT detectada en %s (Confianza %d%%), pero el saldo en Binance Futuros USDT-M es %.2f USDT. "
+                            "Para activar SHORT habilita 'Futuros' en tu API Key de Binance y transfiere USDT a Billetera Futuros USDⓈ-M.",
+                            dec.symbol,
+                            dec.confidence,
+                            futures_usdt,
+                        )
+                        continue
+
+                    if snap is not None and snap.structural_short_sl_price > price:
+                        structural_sl = snap.structural_short_sl_price
+                    elif snap is not None and snap.prev_candle_high > price:
+                        structural_sl = snap.prev_candle_high
+                    else:
+                        structural_sl = round(price * (1.0 + dec.stop_loss_pct), 6)
+
+                    avail_futures = futures_usdt if not self._effective_dry_run else max(0.0, usdt_free - self.config.min_usdt_reserve)
+                    if avail_futures < self.config.min_order_usdt:
+                        continue
+
+                    order_usdt, risk_usd = calculate_position_size_1pct_risk(
+                        total_equity_usdt=total_equity,
+                        available_usdt=avail_futures,
+                        entry_price=price,
+                        stop_loss_price=structural_sl,
+                        risk_pct=self.config.risk_per_trade_pct,
+                        min_risk_usd=self.config.min_risk_usd,
+                        max_position_pct=min(self.config.max_position_pct, max(dec.allocation_pct, 0.65)),
+                    )
+                    if order_usdt < self.config.min_order_usdt:
+                        continue
+
+                    pattern_tag = snap.candle_pattern if snap else "IA_SHORT"
+                    stoch_tag = f"Stoch %K={snap.stoch_k}" if snap else ""
+                    trade = self._execute_futures_entry(
+                        state=state,
+                        symbol=dec.symbol,
+                        side="SHORT",
+                        usdt_amount=order_usdt,
+                        stop_loss_price=structural_sl,
+                        take_profit_pct=dec.take_profit_pct,
+                        reason=(
+                            f"Futuros SHORT S1 ({pattern_tag}, {stoch_tag}, Riesgo ~${risk_usd} USD / 1%): "
+                            f"{dec.reasoning}"
+                        ),
+                    )
+                    if trade:
+                        executed_actions.append(trade)
+                        futures_usdt = max(0.0, futures_usdt - float(trade.get("quote_qty", order_usdt)))
+                        usdt_free = max(0.0, usdt_free - float(trade.get("quote_qty", order_usdt)))
+                    continue
+
+                # Rama BUY (LONG): opera en Spot si hay saldo Spot, o en Futuros USDT-M si el saldo esta en Futuros
                 has_institutional_pillar = snap is not None and (
                     snap.entry_pillar
                     in (
@@ -294,20 +352,40 @@ class AutonomousTradingBot:
 
                 pattern_tag = snap.candle_pattern if snap else "IA_SIGNAL"
                 stoch_tag = f"Stoch %K={snap.stoch_k}" if snap else ""
-                trade = self._execute_buy(
-                    state=state,
-                    symbol=dec.symbol,
-                    usdt_amount=order_usdt,
-                    stop_loss_price=structural_sl,
-                    take_profit_pct=dec.take_profit_pct,
-                    reason=(
-                        f"Estrategia EMA200+Stoch ({pattern_tag}, {stoch_tag}, Riesgo ~${risk_usd} USD / 1%): "
-                        f"{dec.reasoning}"
-                    ),
-                )
-                if trade:
-                    executed_actions.append(trade)
-                    usdt_free -= float(trade.get("quote_qty", order_usdt))
+                # Si el usuario tiene el saldo en Futuros USDT-M y no en Spot, ejecuta el LONG directamente en Futuros USDT-M
+                if spot_usdt_free < self.config.min_order_usdt and futures_usdt >= self.config.min_order_usdt:
+                    trade = self._execute_futures_entry(
+                        state=state,
+                        symbol=dec.symbol,
+                        side="LONG",
+                        usdt_amount=min(order_usdt, futures_usdt),
+                        stop_loss_price=structural_sl,
+                        take_profit_pct=dec.take_profit_pct,
+                        reason=(
+                            f"Futuros LONG ({pattern_tag}, {stoch_tag}, Riesgo ~${risk_usd} USD / 1%): "
+                            f"{dec.reasoning}"
+                        ),
+                    )
+                    if trade:
+                        executed_actions.append(trade)
+                        futures_usdt = max(0.0, futures_usdt - float(trade.get("quote_qty", order_usdt)))
+                        usdt_free = max(0.0, usdt_free - float(trade.get("quote_qty", order_usdt)))
+                else:
+                    trade = self._execute_buy(
+                        state=state,
+                        symbol=dec.symbol,
+                        usdt_amount=order_usdt,
+                        stop_loss_price=structural_sl,
+                        take_profit_pct=dec.take_profit_pct,
+                        reason=(
+                            f"Estrategia EMA200+Stoch ({pattern_tag}, {stoch_tag}, Riesgo ~${risk_usd} USD / 1%): "
+                            f"{dec.reasoning}"
+                        ),
+                    )
+                    if trade:
+                        executed_actions.append(trade)
+                        spot_usdt_free = max(0.0, spot_usdt_free - float(trade.get("quote_qty", order_usdt)))
+                        usdt_free = max(0.0, usdt_free - float(trade.get("quote_qty", order_usdt)))
 
         # 9. Guardar estado y reporte Markdown
         state.last_equity_usdt = total_equity
@@ -348,15 +426,30 @@ class AutonomousTradingBot:
         state: BotState,
         balances: dict[str, float],
         all_prices: dict[str, float],
+        futures_usdt: float = 0.0,
     ) -> tuple[float, float]:
         quote = self.config.quote_asset
-        usdt_free = float(balances.get(quote, 0.0))
+        usdt_free = float(balances.get(quote, 0.0)) + float(futures_usdt)
         total_equity = usdt_free
 
         to_remove: list[str] = []
         for sym, pos in list(state.positions.items()):
-            live_qty = float(balances.get(pos.base_asset, 0.0))
             cur_price = float(all_prices.get(sym, pos.entry_price))
+            if pos.market_type == "FUTURES":
+                if cur_price > pos.highest_price:
+                    pos.highest_price = cur_price
+                if pos.lowest_price <= 0 or cur_price < pos.lowest_price:
+                    pos.lowest_price = cur_price
+                notional_entry = pos.quantity * pos.entry_price
+                pnl_usdt = (
+                    (pos.entry_price - cur_price) * pos.quantity
+                    if pos.side == "SHORT"
+                    else (cur_price - pos.entry_price) * pos.quantity
+                )
+                total_equity += max(0.0, notional_entry + pnl_usdt)
+                continue
+
+            live_qty = float(balances.get(pos.base_asset, 0.0))
             live_val_usdt = live_qty * cur_price
 
             if live_val_usdt < (self.config.min_order_usdt * 0.45):
@@ -366,6 +459,8 @@ class AutonomousTradingBot:
             pos.quantity = live_qty
             if cur_price > pos.highest_price:
                 pos.highest_price = cur_price
+            if pos.lowest_price <= 0 or cur_price < pos.lowest_price:
+                pos.lowest_price = cur_price
             total_equity += live_val_usdt
 
         for sym in to_remove:
@@ -395,6 +490,7 @@ class AutonomousTradingBot:
                     opened_at=utc_now_iso(),
                     entry_reason="Posicion preexistente sincronizada de Binance Spot",
                     initial_stop_loss_price=sl_init,
+                    lowest_price=cur_price,
                 )
                 total_equity += val_usdt
 
@@ -433,11 +529,118 @@ class AutonomousTradingBot:
 
             if cur_price > pos.highest_price:
                 pos.highest_price = cur_price
+            if pos.lowest_price <= 0 or cur_price < pos.lowest_price:
+                pos.lowest_price = cur_price
 
             pnl_pct = pos.unrealized_pnl_pct(cur_price)
             r_mult = pos.r_multiple(cur_price)
             snap = snapshots_map.get(sym)
 
+            # === GESTION DE POSICIONES SHORT (Futuros USDT-M) ===
+            if pos.side == "SHORT":
+                # 1. ¿Toco el Stop-Loss actual (por arriba en SHORT)?
+                if pos.stop_loss_price > 0 and cur_price >= pos.stop_loss_price:
+                    locked_tag = (
+                        "GANANCIA ASEGURADA SHORT (Trailing SL)"
+                        if pos.stop_loss_price < pos.entry_price
+                        else "STOP-LOSS SHORT (Alto estructural + ATR)"
+                    )
+                    reason = f"{locked_tag} alcanzado ({cur_price} >= {pos.stop_loss_price}, PnL {pnl_pct:+.2f}%)"
+                    logger.warning("Ejecutando salida SHORT en %s: %s", sym, reason)
+                    trade = self._execute_sell(state, sym, cur_price, reason=reason)
+                    if trade:
+                        actions.append(trade)
+                    continue
+
+                # 2. ¿Estocastico <= 20 en sobreventa con vela alcista de giro o recuperacion de EMA 200?
+                is_stoch_oversold = snap is not None and (
+                    snap.stoch_k <= self.config.stoch_oversold or snap.stoch_d <= self.config.stoch_oversold
+                )
+                has_bullish_reversal = snap is not None and (
+                    snap.candle_pattern in ("BULLISH_HAMMER", "BULLISH_ENGULFING", "MORNING_STAR") or snap.above_ema_200
+                )
+                if is_stoch_oversold and has_bullish_reversal and pnl_pct >= 1.5:
+                    reason = (
+                        f"CIERRE SHORT POR ESTOCASTICO <= {self.config.stoch_oversold:.0f} + GIRO ALCISTA "
+                        f"(%K={snap.stoch_k if snap else 0}, Patron={snap.candle_pattern if snap else 'NONE'}, PnL {pnl_pct:+.2f}%)"
+                    )
+                    logger.info("Cerrando posicion SHORT en %s: %s", sym, reason)
+                    trade = self._execute_sell(state, sym, cur_price, reason=reason)
+                    if trade:
+                        actions.append(trade)
+                    continue
+
+                # 2b. Cosecha por Tiempo en SHORT (36h Time-Profit Harvest)
+                if pos.hours_open() >= 36.0 and pnl_pct >= 0.6 and snap is not None and snap.stoch_k <= 28.0:
+                    reason = (
+                        f"COSECHA CUANTITATIVA SHORT 36H (Horas={pos.hours_open():.1f}h, Stoch %K={snap.stoch_k}, PnL {pnl_pct:+.2f}%)"
+                    )
+                    logger.info("Cerrando posicion SHORT por Time-Profit Harvest en %s: %s", sym, reason)
+                    trade = self._execute_sell(state, sym, cur_price, reason=reason)
+                    if trade:
+                        actions.append(trade)
+                    continue
+
+                # 3. Trailing Dinamico hacia abajo para dejar correr ganancias en SHORT
+                if pnl_pct > 0:
+                    old_sl = pos.stop_loss_price
+                    old_tp = pos.take_profit_price
+                    candidate_sl = old_sl
+                    candidate_tp = old_tp
+                    reasons_list_short: list[str] = []
+
+                    if r_mult >= 1.0 or pnl_pct >= 1.8:
+                        lock_pct = 0.009 if pnl_pct >= 2.2 else 0.003
+                        be_minus = round(pos.entry_price * (1.0 - lock_pct), 8)
+                        if (candidate_sl <= 0 or be_minus < candidate_sl) and be_minus > cur_price * 1.004:
+                            candidate_sl = be_minus
+                            reasons_list_short.append(f"Break-Even SHORT+{lock_pct * 100:.1f}%")
+
+                    if pnl_pct >= 2.2 or r_mult >= 1.5:
+                        keep_ratio = 0.80 if pnl_pct >= 5.5 else (0.76 if pnl_pct >= 3.2 else 0.60)
+                        drop_span = pos.entry_price - pos.lowest_price
+                        lock_low_sl = round(pos.entry_price - (drop_span * keep_ratio), 8)
+                        if (candidate_sl <= 0 or lock_low_sl < candidate_sl) and lock_low_sl > cur_price * 1.004:
+                            candidate_sl = lock_low_sl
+                            reasons_list_short.append(f"Asegurar {int(keep_ratio * 100)}% de caida SHORT")
+
+                    if old_tp > 0 and cur_price <= (old_tp * 1.005):
+                        drop_span = pos.entry_price - cur_price
+                        tp_lock_sl = round(pos.entry_price - (drop_span * 0.80), 8)
+                        if (candidate_sl <= 0 or tp_lock_sl < candidate_sl) and tp_lock_sl > cur_price * 1.003:
+                            candidate_sl = tp_lock_sl
+                        step_pct = max(0.035, (snap.atr_pct * 2.0 / 100.0) if snap else 0.035)
+                        candidate_tp = round(cur_price * (1.0 - step_pct), 8)
+                        reasons_list_short.append(f"Meta TP SHORT alcanzada -> expandiendo TP (-{step_pct * 100:.1f}%)")
+
+                    sl_changed = old_sl > 0 and candidate_sl < old_sl * 0.9995
+                    tp_changed = old_tp > 0 and candidate_tp < old_tp * 0.999
+                    if sl_changed or tp_changed:
+                        pos.stop_loss_price = candidate_sl if sl_changed else old_sl
+                        pos.take_profit_price = candidate_tp if tp_changed else old_tp
+                        pos.sl_adjustments_count += 1
+                        reason_str = " | ".join(reasons_list_short) or "Ajuste dinamico SHORT en ganancia"
+                        pos.last_adjustment_reason = reason_str
+                        adj_event = {
+                            "timestamp": utc_now_iso(),
+                            "symbol": sym,
+                            "side": "ADJUST_SL_TP",
+                            "mode": "DRY_RUN" if self._effective_dry_run else "LIVE",
+                            "price": cur_price,
+                            "quote_qty": round(pos.quantity * cur_price, 2),
+                            "old_stop_loss": old_sl,
+                            "new_stop_loss": pos.stop_loss_price,
+                            "old_take_profit": old_tp,
+                            "new_take_profit": pos.take_profit_price,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "locked_profit_pct": round(pos.locked_profit_pct(), 2),
+                            "reason": f"Bot Auto-Trail SHORT: {reason_str}",
+                        }
+                        self.state_manager.append_trade(adj_event)
+                        actions.append(adj_event)
+                continue
+
+            # === GESTION DE POSICIONES LONG (Spot / Futuros USDT-M) ===
             # 1. ¿Toco el Stop-Loss actual?
             if pos.stop_loss_price > 0 and cur_price <= pos.stop_loss_price:
                 locked_tag = "GANANCIA ASEGURADA (Trailing SL)" if pos.stop_loss_price > pos.entry_price else "STOP-LOSS (Bajo de vela previa)"
@@ -585,7 +788,7 @@ class AutonomousTradingBot:
     ) -> dict[str, Any] | None:
         """
         Aplica los ajustes de Stop-Loss y Take-Profit sugeridos por Gemini AI para dejar correr ganancias.
-        Regla de seguridad (Ratchet): El Stop-Loss NUNCA se baja, solo se sube a favor de la operacion.
+        Regla de seguridad (Ratchet): El Stop-Loss NUNCA retrocede en contra de la operacion.
         """
         pos = state.positions.get(decision.symbol)
         if not pos or current_price <= 0:
@@ -596,13 +799,19 @@ class AutonomousTradingBot:
         new_sl = old_sl
         new_tp = old_tp
 
-        # Solo aceptamos subir el Stop-Loss (y debe estar por debajo del precio actual con un margen minimo de 0.25%)
-        if decision.new_stop_loss_price > old_sl * 1.0005 and decision.new_stop_loss_price < current_price * 0.9975:
-            new_sl = round(decision.new_stop_loss_price, 8)
+        if pos.side == "SHORT":
+            if decision.new_stop_loss_price > 0 and decision.new_stop_loss_price < old_sl * 0.9995 and decision.new_stop_loss_price > current_price * 1.0025:
+                new_sl = round(decision.new_stop_loss_price, 8)
+            if decision.new_take_profit_price > 0 and decision.new_take_profit_price < old_tp * 0.999 and decision.new_take_profit_price < current_price * 0.995:
+                new_tp = round(decision.new_take_profit_price, 8)
+        else:
+            # Solo aceptamos subir el Stop-Loss (y debe estar por debajo del precio actual con un margen minimo de 0.25%)
+            if decision.new_stop_loss_price > old_sl * 1.0005 and decision.new_stop_loss_price < current_price * 0.9975:
+                new_sl = round(decision.new_stop_loss_price, 8)
 
-        # Aceptamos subir el Take-Profit por encima del precio actual para ampliar el recorrido de ganancias
-        if decision.new_take_profit_price > old_tp * 1.001 and decision.new_take_profit_price > current_price * 1.005:
-            new_tp = round(decision.new_take_profit_price, 8)
+            # Aceptamos subir el Take-Profit por encima del precio actual para ampliar el recorrido de ganancias
+            if decision.new_take_profit_price > old_tp * 1.001 and decision.new_take_profit_price > current_price * 1.005:
+                new_tp = round(decision.new_take_profit_price, 8)
 
         if new_sl == old_sl and new_tp == old_tp:
             return None
@@ -676,12 +885,16 @@ class AutonomousTradingBot:
                 opened_at=utc_now_iso(),
                 entry_reason=reason,
                 initial_stop_loss_price=sl_price,
+                side="LONG",
+                market_type="SPOT",
+                lowest_price=avg_price,
             )
 
             record = {
                 "timestamp": utc_now_iso(),
                 "symbol": symbol,
                 "side": "BUY",
+                "market_type": "SPOT",
                 "mode": "DRY_RUN" if self._effective_dry_run else "LIVE",
                 "quantity": exec_qty,
                 "price": avg_price,
@@ -691,10 +904,91 @@ class AutonomousTradingBot:
                 "reason": reason,
             }
             self.state_manager.append_trade(record)
-            logger.info("COMPRA ejecutada: %s | Cantidad: %s @ %s | Total: %.2f USDT | SL: %s", symbol, exec_qty, avg_price, quote_qty, sl_price)
+            logger.info("COMPRA SPOT ejecutada: %s | Cantidad: %s @ %s | Total: %.2f USDT | SL: %s", symbol, exec_qty, avg_price, quote_qty, sl_price)
             return record
         except Exception as exc:
             logger.error("Error al ejecutar COMPRA de %s: %s", symbol, exc)
+            return None
+
+    def _execute_futures_entry(
+        self,
+        state: BotState,
+        symbol: str,
+        side: str,
+        usdt_amount: float,
+        stop_loss_price: float,
+        take_profit_pct: float,
+        reason: str,
+        leverage: int = 2,
+    ) -> dict[str, Any] | None:
+        """Ejecuta una entrada LONG o SHORT en Binance Futuros USDT-M con margen AISLADO."""
+        order_side = "SELL" if side == "SHORT" else "BUY"
+        try:
+            order = self.client.place_futures_market_order(
+                symbol=symbol,
+                side=order_side,
+                usdt_amount=usdt_amount,
+                leverage=leverage,
+                reduce_only=False,
+                dry_run=self._effective_dry_run,
+            )
+            exec_qty = float(order.get("executedQty", 0.0))
+            quote_qty = float(order.get("cummulativeQuoteQty", usdt_amount))
+            avg_price = float(order.get("avgPrice", 0.0))
+            if exec_qty <= 0 or avg_price <= 0:
+                return None
+
+            if side == "SHORT":
+                sl_price = round(stop_loss_price, 8) if stop_loss_price > avg_price else round(avg_price * (1.0 + self.config.stop_loss_pct), 8)
+                tp_price = round(avg_price * (1.0 - take_profit_pct), 8)
+            else:
+                sl_price = round(stop_loss_price, 8) if 0 < stop_loss_price < avg_price else round(avg_price * (1.0 - self.config.stop_loss_pct), 8)
+                tp_price = round(avg_price * (1.0 + take_profit_pct), 8)
+
+            base_asset = symbol[: -len(self.config.quote_asset)]
+            state.positions[symbol] = PositionState(
+                symbol=symbol,
+                base_asset=base_asset,
+                quantity=exec_qty,
+                entry_price=avg_price,
+                highest_price=avg_price,
+                stop_loss_price=sl_price,
+                take_profit_price=tp_price,
+                opened_at=utc_now_iso(),
+                entry_reason=reason,
+                initial_stop_loss_price=sl_price,
+                side=side,
+                market_type="FUTURES",
+                lowest_price=avg_price,
+            )
+
+            record = {
+                "timestamp": utc_now_iso(),
+                "symbol": symbol,
+                "side": side,
+                "market_type": "FUTURES",
+                "mode": "DRY_RUN" if self._effective_dry_run else "LIVE",
+                "quantity": exec_qty,
+                "price": avg_price,
+                "quote_qty": round(quote_qty, 2),
+                "stop_loss_price": sl_price,
+                "take_profit_price": tp_price,
+                "reason": reason,
+            }
+            self.state_manager.append_trade(record)
+            logger.info(
+                "FUTUROS %s ejecutado: %s | Cantidad: %s @ %s | Nocional: %.2f USDT | SL: %s | TP: %s",
+                side,
+                symbol,
+                exec_qty,
+                avg_price,
+                quote_qty,
+                sl_price,
+                tp_price,
+            )
+            return record
+        except Exception as exc:
+            logger.error("Error al ejecutar FUTUROS %s en %s: %s", side, symbol, exc)
             return None
 
     def _execute_sell(
@@ -709,16 +1003,31 @@ class AutonomousTradingBot:
             return None
 
         try:
-            order = self.client.place_market_sell_quantity(
-                symbol=symbol,
-                quantity=pos.quantity,
-                dry_run=self._effective_dry_run,
-            )
+            if pos.market_type == "FUTURES":
+                close_side = "BUY" if pos.side == "SHORT" else "SELL"
+                order = self.client.place_futures_market_order(
+                    symbol=symbol,
+                    side=close_side,
+                    usdt_amount=pos.quantity * current_price,
+                    leverage=2,
+                    reduce_only=True,
+                    quantity=pos.quantity,
+                    dry_run=self._effective_dry_run,
+                )
+            else:
+                order = self.client.place_market_sell_quantity(
+                    symbol=symbol,
+                    quantity=pos.quantity,
+                    dry_run=self._effective_dry_run,
+                )
             exec_qty = float(order.get("executedQty", pos.quantity))
             quote_qty = float(order.get("cummulativeQuoteQty", exec_qty * current_price))
             avg_price = float(order.get("avgPrice", current_price))
             pnl_pct = pos.unrealized_pnl_pct(avg_price)
-            pnl_usdt = quote_qty - (exec_qty * pos.entry_price)
+            if pos.side == "SHORT":
+                pnl_usdt = (pos.entry_price - avg_price) * exec_qty
+            else:
+                pnl_usdt = quote_qty - (exec_qty * pos.entry_price)
 
             state.positions.pop(symbol, None)
 
@@ -726,6 +1035,8 @@ class AutonomousTradingBot:
                 "timestamp": utc_now_iso(),
                 "symbol": symbol,
                 "side": "SELL",
+                "position_side": pos.side,
+                "market_type": pos.market_type,
                 "mode": "DRY_RUN" if self._effective_dry_run else "LIVE",
                 "quantity": exec_qty,
                 "entry_price": pos.entry_price,
@@ -737,7 +1048,9 @@ class AutonomousTradingBot:
             }
             self.state_manager.append_trade(record)
             logger.info(
-                "VENTA ejecutada: %s | Cantidad: %s @ %s | PnL: %+.2f USDT (%+.2f%%)",
+                "CIERRE (%s %s) ejecutado: %s | Cantidad: %s @ %s | PnL: %+.2f USDT (%+.2f%%)",
+                pos.market_type,
+                pos.side,
                 symbol,
                 exec_qty,
                 avg_price,
@@ -746,7 +1059,7 @@ class AutonomousTradingBot:
             )
             return record
         except Exception as exc:
-            logger.error("Error al ejecutar VENTA de %s: %s", symbol, exc)
+            logger.error("Error al ejecutar CIERRE de %s: %s", symbol, exc)
             return None
 
     def _build_markdown_report(
@@ -760,9 +1073,9 @@ class AutonomousTradingBot:
         executed_actions: list[dict[str, Any]],
         all_prices: dict[str, float],
     ) -> str:
-        mode_label = "SIMULACION / CARTERA VIRTUAL" if self._effective_dry_run else "CUENTA REAL (LIVE)"
+        mode_label = "SIMULACION / CARTERA VIRTUAL" if self._effective_dry_run else "CUENTA REAL DUAL (SPOT + FUTUROS USDT-M)"
         lines = [
-            "# Reporte Autonomo - Estrategia EMA 200 + Estocastico (80/20) + SL/TP Dinamico (1H)",
+            "# Reporte Autonomo - Estrategia Dual Spot + Futuros (EMA 200 + Estocastico + Pilares Cuantitativos 1H)",
             "",
             f"- **Ultima actualizacion (UTC):** `{state.updated_at}`",
             f"- **Ciclo de ejecucion:** `#{state.total_cycles}`",
@@ -776,7 +1089,7 @@ class AutonomousTradingBot:
             "## Lectura de Mercado de Gemini AI",
             f"> {ai_result.summary}",
             "",
-            "## Posiciones Abiertas (Con Stop-Loss y Take-Profit Dinamicos)",
+            "## Posiciones Abiertas (LONG Spot/Futuros & SHORT Futuros con SL/TP Dinamicos)",
         ]
 
         if not state.positions:
@@ -784,8 +1097,8 @@ class AutonomousTradingBot:
         else:
             lines.extend(
                 [
-                    "| Par | Entrada | Precio Actual | PnL Actual | SL Inicial | SL Actual (Dinamico) | Ganancia Asegurada | TP Actual (Dinamico) | Ajustes |",
-                    "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                    "| Par | Lado / Mercado | Entrada | Precio Actual | PnL Actual | SL Inicial | SL Actual (Dinamico) | Ganancia Asegurada | TP Actual (Dinamico) | Ajustes |",
+                    "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
                 ]
             )
             for sym, pos in state.positions.items():
@@ -793,7 +1106,7 @@ class AutonomousTradingBot:
                 pnl = pos.unrealized_pnl_pct(cur)
                 locked = pos.locked_profit_pct()
                 lines.append(
-                    f"| `{sym}` | {pos.entry_price} | {cur} | **{pnl:+.2f}%** | {pos.initial_stop_loss_price} | **{pos.stop_loss_price}** | `{locked:+.2f}%` | **{pos.take_profit_price}** | {pos.sl_adjustments_count} |"
+                    f"| `{sym}` | `{pos.side} ({pos.market_type})` | {pos.entry_price} | {cur} | **{pnl:+.2f}%** | {pos.initial_stop_loss_price} | **{pos.stop_loss_price}** | `{locked:+.2f}%` | **{pos.take_profit_price}** | {pos.sl_adjustments_count} |"
                 )
 
         lines.extend(["", "## Operaciones y Ajustes de SL/TP en este Ciclo"])
@@ -816,7 +1129,7 @@ class AutonomousTradingBot:
         lines.extend(
             [
                 "",
-                "## Escaneo Cuantitativo 1H (3 Pilares Optimizados 6M: EMA 200 Pullback + Capitulacion Extrema + Divergencia Spring)",
+                "## Escaneo Cuantitativo 1H (Pilares LONG P1-P4 + Pilar SHORT S1 en Futuros USDT-M)",
                 "| Par | Precio | EMA 200 | Dist EMA | Estocastico (%K / %D) | RSI(14) | BB %B | Vela (1H) | SL (ATR) | Pilar / Setup | Decision IA |",
                 "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
             ]
@@ -826,7 +1139,11 @@ class AutonomousTradingBot:
             d = dec_map.get(s.symbol)
             act = f"**{d.action}** ({d.confidence}%)" if d else "HOLD"
             ema_pos = f"`{s.dist_to_ema200_pct:+.2f}%`"
-            sl_ref = s.structural_sl_price if s.structural_sl_price > 0 else s.prev_candle_low
+            sl_ref = (
+                s.structural_short_sl_price
+                if s.strategy_setup == "SHORT_ENTRY" and s.structural_short_sl_price > 0
+                else (s.structural_sl_price if s.structural_sl_price > 0 else s.prev_candle_low)
+            )
             pillar_str = s.entry_pillar if s.entry_pillar != "NONE" else s.strategy_setup
             lines.append(
                 f"| `{s.symbol}` | {s.current_price} | {s.ema_200} | {ema_pos} | `{s.stoch_k}` / `{s.stoch_d}` | `{s.rsi_14}` | `{s.bb_pct_b}` | `{s.candle_pattern}` | {sl_ref} | `{pillar_str}` | {act} |"

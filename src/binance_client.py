@@ -430,3 +430,201 @@ class BinanceSpotClient:
         quote_qty = float(order.get("cummulativeQuoteQty", 0.0))
         order["avgPrice"] = (quote_qty / exec_qty) if exec_qty > 0 else current_price
         return order
+
+    # =========================================================================
+    # BINANCE FUTURES USDT-M (LONG & SHORT CON MARGEN AISLADO)
+    # =========================================================================
+    def _futures_request(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None = None,
+        signed: bool = False,
+    ) -> Any:
+        base_url = "https://fapi.binance.com"
+        req_params = dict(params or {})
+
+        if signed:
+            if not self.api_key or not self.api_secret:
+                raise ValueError("Se requieren BINANCE_API_KEY y BINANCE_API_SECRET para llamadas a Futuros.")
+            req_params.setdefault("recvWindow", 10000)
+            req_params["timestamp"] = int(time.time() * 1000) + self.time_offset_ms
+            query_string = self._sign_params(req_params)
+        else:
+            query_string = urlencode(req_params, doseq=True) if req_params else ""
+
+        proxy_chain: list[dict[str, str] | None] = (
+            [{"http": p, "https": p} for p in self.proxy_candidates] + [None]
+            if self.proxy_candidates
+            else [None]
+        )
+
+        last_error: Exception | None = None
+        for proxies in proxy_chain:
+            url = f"{base_url}{path}"
+            if query_string:
+                url = f"{url}?{query_string}"
+            try:
+                resp = self.session.request(method=method, url=url, timeout=self.timeout, proxies=proxies)
+            except requests.RequestException as exc:
+                last_error = exc
+                continue
+
+            if resp.status_code == 451:
+                last_error = BinanceAPIError(451, -451, "HTTP 451 en Binance Futures API.")
+                continue
+
+            if resp.status_code >= 400:
+                try:
+                    err_payload = resp.json()
+                    err_code = err_payload.get("code")
+                    err_msg = err_payload.get("msg", resp.text)
+                except ValueError:
+                    err_code = None
+                    err_msg = resp.text
+                raise BinanceAPIError(resp.status_code, err_code, err_msg)
+
+            return resp.json()
+
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"No se pudo completar solicitud a Binance Futures para {path}")
+
+    def get_futures_usdt_balance(self) -> float:
+        """
+        Retorna el saldo USDT disponible en la billetera de Futuros USDT-M.
+        Si la API key aun no tiene activado el permiso 'Enable Futures' (-2015), retorna 0.0 sin fallar.
+        """
+        try:
+            self.sync_time()
+            rows = self._futures_request("GET", "/fapi/v2/balance", signed=True)
+            for item in rows:
+                if item.get("asset") == "USDT":
+                    return float(item.get("availableBalance", item.get("balance", 0.0)))
+            return 0.0
+        except BinanceAPIError as exc:
+            if exc.code in (-2015, -2014) or exc.status_code in (401, 403):
+                logger.debug("Permiso de Futuros no activo en la API Key actual (operando en Spot): %s", exc.message)
+                return 0.0
+            logger.warning("No se pudo consultar saldo de Futuros: %s", exc)
+            return 0.0
+        except Exception as exc:
+            logger.debug("Futuros no disponible: %s", exc)
+            return 0.0
+
+    def get_futures_symbol_filter(self, symbol: str) -> SymbolFilters | None:
+        cache_key = f"FUT_{symbol}"
+        if cache_key in self._symbol_filters_cache:
+            return self._symbol_filters_cache[cache_key]
+        try:
+            data = self._futures_request("GET", "/fapi/v1/exchangeInfo", signed=False)
+            for sym_info in data.get("symbols", []):
+                sym = sym_info["symbol"]
+                step_size = Decimal("0.001")
+                min_qty = Decimal("0.001")
+                max_qty = Decimal("9000000000")
+                min_notional = Decimal("5.0")
+                tick_size = Decimal("0.0001")
+                for f in sym_info.get("filters", []):
+                    ftype = f.get("filterType")
+                    if ftype == "LOT_SIZE":
+                        step_size = Decimal(str(f.get("stepSize", "0.001")))
+                        min_qty = Decimal(str(f.get("minQty", "0.001")))
+                        max_qty = Decimal(str(f.get("maxQty", "9000000000")))
+                    elif ftype == "MIN_NOTIONAL":
+                        min_notional = Decimal(str(f.get("notional", "5.0")))
+                    elif ftype == "PRICE_FILTER":
+                        tick_size = Decimal(str(f.get("tickSize", "0.0001")))
+                self._symbol_filters_cache[f"FUT_{sym}"] = SymbolFilters(
+                    symbol=sym,
+                    base_asset=sym_info.get("baseAsset", ""),
+                    quote_asset=sym_info.get("quoteAsset", "USDT"),
+                    status=sym_info.get("status", "TRADING"),
+                    step_size=step_size,
+                    min_qty=min_qty,
+                    max_qty=max_qty,
+                    min_notional=min_notional,
+                    tick_size=tick_size,
+                    quote_order_qty_allowed=False,
+                )
+            return self._symbol_filters_cache.get(cache_key)
+        except Exception as exc:
+            logger.warning("No se pudieron obtener filtros de Futuros para %s: %s", symbol, exc)
+            return None
+
+    def configure_futures_leverage(self, symbol: str, leverage: int = 2) -> None:
+        """Configura Margen AISLADO (ISOLATED) y apalancamiento conservador (por defecto 2x)."""
+        try:
+            self._futures_request(
+                "POST",
+                "/fapi/v1/marginType",
+                params={"symbol": symbol, "marginType": "ISOLATED"},
+                signed=True,
+            )
+        except Exception:
+            pass  # Si ya esta en ISOLATED devuelve codigo -4046
+        try:
+            self._futures_request(
+                "POST",
+                "/fapi/v1/leverage",
+                params={"symbol": symbol, "leverage": leverage},
+                signed=True,
+            )
+        except Exception as exc:
+            logger.debug("No se pudo ajustar apalancamiento en %s: %s", symbol, exc)
+
+    def place_futures_market_order(
+        self,
+        symbol: str,
+        side: str,  # "BUY" o "SELL"
+        usdt_margin: float = 0.0,
+        leverage: int = 2,
+        quantity: float = 0.0,
+        reduce_only: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Ejecuta una orden a mercado en Binance Futuros USDT-M (LONG o SHORT)."""
+        fut_filter = self.get_futures_symbol_filter(symbol)
+        current_price = self.get_ticker_price(symbol)
+
+        if quantity <= 0:
+            notional_usdt = usdt_margin * leverage
+            raw_qty = notional_usdt / current_price
+        else:
+            raw_qty = quantity
+
+        formatted_qty = fut_filter.format_quantity(raw_qty) if fut_filter else f"{raw_qty:.4f}"
+        rounded_qty = float(formatted_qty)
+        quote_total = rounded_qty * current_price
+
+        if dry_run:
+            return {
+                "symbol": symbol,
+                "side": side,
+                "type": "MARKET",
+                "status": "FILLED_DRY_RUN",
+                "executedQty": formatted_qty,
+                "cummulativeQuoteQty": f"{quote_total:.2f}",
+                "avgPrice": current_price,
+                "transactTime": int(time.time() * 1000),
+            }
+
+        if not reduce_only:
+            self.configure_futures_leverage(symbol, leverage=leverage)
+
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "side": side.upper(),
+            "type": "MARKET",
+            "quantity": formatted_qty,
+        }
+        if reduce_only:
+            params["reduceOnly"] = "true"
+
+        order = self._futures_request("POST", "/fapi/v1/order", params=params, signed=True)
+        exec_qty = float(order.get("executedQty", rounded_qty))
+        avg_price = float(order.get("avgPrice", 0.0)) or current_price
+        order["avgPrice"] = avg_price
+        order["executedQty"] = str(exec_qty)
+        order["cummulativeQuoteQty"] = f"{exec_qty * avg_price:.2f}"
+        return order

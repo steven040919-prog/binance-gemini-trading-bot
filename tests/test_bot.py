@@ -33,12 +33,40 @@ class FakeBinanceClient:
         }
         self.buys: list[tuple[str, float]] = []
         self.sells: list[tuple[str, float]] = []
+        self.futures_usdt: float = 0.0
+        self.futures_orders: list[tuple[str, str, float]] = []
 
     def get_all_prices(self) -> dict[str, float]:
         return dict(self.prices)
 
     def get_account_balances(self) -> dict[str, float]:
         return dict(self.balances)
+
+    def get_futures_usdt_balance(self) -> float:
+        return self.futures_usdt
+
+    def place_futures_market_order(
+        self,
+        symbol: str,
+        side: str,
+        usdt_amount: float,
+        leverage: int = 2,
+        reduce_only: bool = False,
+        quantity: float = 0.0,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        price = self.prices[symbol]
+        qty = quantity if (reduce_only and quantity > 0) else round(usdt_amount / price, 5)
+        quote_qty = qty * price
+        self.futures_orders.append((symbol, side, quote_qty))
+        return {
+            "symbol": symbol,
+            "side": side,
+            "executedQty": str(qty),
+            "cummulativeQuoteQty": f"{quote_qty:.2f}",
+            "avgPrice": price,
+            "marketType": "FUTURES",
+        }
 
     def place_market_buy_usdt(self, symbol: str, usdt_amount: float, dry_run: bool = False) -> dict[str, Any]:
         price = self.prices[symbol]
@@ -308,9 +336,78 @@ def test_dynamic_sl_tp_trailing_and_ai_adjust(tmp_path: Path) -> None:
     assert any(s[0] == "ETHUSDT" for s in fake_client.sells)
 
 
+def test_futures_short_entry_and_downward_trailing(tmp_path: Path) -> None:
+    cfg = BotConfig(
+        binance_api_key="key",
+        binance_api_secret="secret",
+        gemini_api_key="gemini",
+        dry_run=False,
+        max_open_positions=3,
+        max_position_pct=0.35,
+        risk_per_trade_pct=0.01,
+        min_risk_usd=1.0,
+        state_file=tmp_path / "state_short.json",
+        history_file=tmp_path / "history_short.json",
+        report_file=tmp_path / "report_short.md",
+    )
+    fake_client = FakeBinanceClient()
+    fake_client.balances = {"USDT": 0.0}
+    fake_client.futures_usdt = 200.0
+    fake_scanner = FakeScanner()
+    fake_ai = FakeAIAgent(
+        decisions=[
+            AIDecision(
+                symbol="SOLUSDT",
+                action="SHORT",
+                confidence=86,
+                allocation_pct=0.65,
+                stop_loss_pct=0.03,
+                take_profit_pct=0.06,
+                reasoning="Pilar SHORT S1: rechazo en EMA 200 con Estocastico en sobrecompra.",
+            )
+        ]
+    )
+    sm = StateManager(cfg.state_file, cfg.history_file, cfg.report_file)
+    bot = AutonomousTradingBot(
+        config=cfg,
+        binance_client=fake_client,  # type: ignore[arg-type]
+        scanner=fake_scanner,  # type: ignore[arg-type]
+        ai_agent=fake_ai,  # type: ignore[arg-type]
+        state_manager=sm,
+    )
+
+    # Ciclo 1: Abre SHORT en SOLUSDT @ 210.0 con SL arriba (212.0) y TP abajo (197.4)
+    summary_1 = bot.run_cycle()
+    assert "SOLUSDT" in summary_1["open_positions"]
+    st_1 = sm.load_state()
+    pos_1 = st_1.positions["SOLUSDT"]
+    assert pos_1.side == "SHORT"
+    assert pos_1.market_type == "FUTURES"
+    assert pos_1.stop_loss_price == 212.0
+
+    # Ciclo 2: SOLUSDT cae a 198.0 (+5.71% de ganancia en SHORT) con Estocastico en 45 -> el SL baja automaticamente asegurando ganancia!
+    fake_client.prices["SOLUSDT"] = 198.0
+    fake_scanner.sol_price = 198.0
+    fake_scanner.sol_stoch_k = 45.0
+    fake_scanner.sol_pattern = "NONE"
+    fake_ai.decisions = []
+    bot.run_cycle()
+    st_2 = sm.load_state()
+    pos_2 = st_2.positions["SOLUSDT"]
+    assert pos_2.stop_loss_price < 210.0
+    assert pos_2.locked_profit_pct() > 3.5
+
+    # Ciclo 3: Estocastico llega a sobreventa (15.0) con Martillo Alcista -> cierra el SHORT cobrando la ganancia!
+    fake_scanner.sol_stoch_k = 15.0
+    fake_scanner.sol_pattern = "BULLISH_HAMMER"
+    summary_3 = bot.run_cycle()
+    assert "SOLUSDT" not in summary_3["open_positions"]
+
+
 if __name__ == "__main__":
     test_symbol_filters_rounding()
     test_candlestick_patterns_and_stochastic()
     test_1pct_risk_position_sizing()
     test_dynamic_sl_tp_trailing_and_ai_adjust(Path(tempfile.mkdtemp()))
-    print("Todas las pruebas de SL/TP dinamico y estrategia pasaron exitosamente.")
+    test_futures_short_entry_and_downward_trailing(Path(tempfile.mkdtemp()))
+    print("Todas las pruebas de SL/TP dinamico (Spot + Futuros LONG/SHORT) pasaron exitosamente.")

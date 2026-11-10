@@ -20,6 +20,17 @@ EXCLUDED_BASE_ASSETS = {
     "USDE",
     "USDS",
     "USD1",
+    "RWUSD",
+    "BFUSD",
+    "U",
+    "SOXLB",
+    "SNDKB",
+    "SPCXB",
+    "KORUB",
+    "QQQB",
+    "NVDB",
+    "TSLAB",
+    "TST",
     "PYUSD",
     "EUR",
     "AEUR",
@@ -89,8 +100,9 @@ class TechnicalSnapshot:
     stoch_turning_up: bool = False
     macd_improving: bool = False
     bullish_divergence: bool = False
-    entry_pillar: str = "NONE"  # "P1_EMA200_PULLBACK", "P2_EXTREME_CAPITULATION", "P3_BULLISH_DIVERGENCE_SPRING", "NONE"
+    entry_pillar: str = "NONE"  # "P1_EMA200_PULLBACK", "P2_EXTREME_CAPITULATION", "P3_BULLISH_DIVERGENCE_SPRING", "P4_STRONG_TREND_EMA50_CONTINUATION", "S1_EMA200_RESISTANCE_REJECT", "NONE"
     structural_sl_price: float = 0.0
+    structural_short_sl_price: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -460,6 +472,11 @@ class MarketScanner:
                 sl_dist_pct = max(0.026, min(0.046, sl_dist_pct))
                 structural_sl_price = round(current_price * (1.0 - sl_dist_pct), 8)
 
+                raw_short_atr_sl = prev_candle_high + (2.0 * atr_abs)
+                short_sl_dist_pct = (raw_short_atr_sl - current_price) / current_price if current_price > 0 else 0.03
+                short_sl_dist_pct = max(0.026, min(0.046, short_sl_dist_pct))
+                structural_short_sl_price = round(current_price * (1.0 + short_sl_dist_pct), 8)
+
                 # 6. Deteccion de Spring / Divergencia Alcista en Soporte de 12H (Pilar 3: 83.3% WR, PF 3.51)
                 bullish_divergence = False
                 if len(candles_primary) >= 18:
@@ -537,14 +554,47 @@ class MarketScanner:
                 ):
                     entry_pillar = "P4_STRONG_TREND_EMA50_CONTINUATION"
 
+                # PILAR SHORT S1 (Para Binance Futuros): Rechazo en Resistencia EMA 200 Descendente + Estocastico >= 80 (78.2% WR, PF 2.00)
+                stoch_turning_down = (stoch_k < prev_stoch_k) and (stoch_k <= stoch_d)
+                max_recent_rsi = max(rsi_14, prev_rsi_14)
+                max_recent_bb = max(bb_pct_b, prev_bb_pct_b)
+                is_bear_candle = candles_primary[-1]["close"] < candles_primary[-1]["open"] or closed_candle["close"] < closed_candle["open"]
+                is_bear_pattern = pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING")
+                broke_prev_low = candles_primary[-1]["close"] < closed_candle["low"] or closed_candle["close"] < prev_closed_candle["low"]
+
+                if (
+                    entry_pillar == "NONE"
+                    and -3.5 <= dist_to_ema200_pct <= 0.6
+                    and ema_200_slope_pct <= 0.0
+                    and ema_50 <= ema_200 * 1.006
+                    and stoch_recent_max >= self.stoch_overbought
+                    and max_recent_rsi >= 64.0
+                    and max_recent_bb >= 0.88
+                    and stoch_turning_down
+                    and (not macd_improving)
+                    and is_bear_candle
+                    and (is_bear_pattern or broke_prev_low)
+                    and vol_ratio >= 1.05
+                ):
+                    entry_pillar = "S1_EMA200_RESISTANCE_REJECT"
+
                 is_oversold_zone = (stoch_k <= self.stoch_oversold) or (stoch_recent_min <= self.stoch_oversold and stoch_k <= 35.0)
                 is_overbought_zone = (stoch_k >= self.stoch_overbought) or (stoch_recent_max >= self.stoch_overbought and stoch_k >= 65.0)
 
-                if entry_pillar != "NONE" or (above_ema_200 and is_oversold_zone and is_bull_pattern and stoch_turning_up):
+                if entry_pillar in (
+                    "P1_EMA200_PULLBACK",
+                    "P2_EXTREME_CAPITULATION",
+                    "P3_BULLISH_DIVERGENCE_SPRING",
+                    "P4_STRONG_TREND_EMA50_CONTINUATION",
+                ) or (above_ema_200 and is_oversold_zone and is_bull_pattern and stoch_turning_up):
                     if entry_pillar == "NONE":
                         entry_pillar = "P1_EMA200_PULLBACK"
                     strategy_setup = "LONG_ENTRY"
-                elif (not above_ema_200) and is_overbought_zone and pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING"):
+                elif entry_pillar == "S1_EMA200_RESISTANCE_REJECT" or (
+                    (not above_ema_200) and is_overbought_zone and is_bear_pattern and stoch_turning_down
+                ):
+                    if entry_pillar == "NONE":
+                        entry_pillar = "S1_EMA200_RESISTANCE_REJECT"
                     strategy_setup = "SHORT_ENTRY"
                 elif stoch_k >= self.stoch_overbought or stoch_d >= self.stoch_overbought:
                     strategy_setup = "EXIT_LONG_STOCH_80"
@@ -607,6 +657,7 @@ class MarketScanner:
                         bullish_divergence=bullish_divergence,
                         entry_pillar=entry_pillar,
                         structural_sl_price=structural_sl_price,
+                        structural_short_sl_price=structural_short_sl_price,
                     )
                 )
             except Exception as exc:

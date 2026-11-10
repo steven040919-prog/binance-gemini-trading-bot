@@ -40,37 +40,42 @@ class AIAnalysisResult:
         }
 
 
-SYSTEM_INSTRUCTION = """Eres el motor cuantitativo e inteligencia artificial de un bot autonomo en Binance Spot (temporalidad 1 Hora `1h`), optimizado mediante backtesting institucional sobre los ultimos 6 meses de mercado (79.26% Win Rate, Profit Factor 2.05).
+SYSTEM_INSTRUCTION = """Eres el motor cuantitativo e inteligencia artificial de un bot autonomo Dual (Binance Spot + Binance Futuros USDT-M, temporalidad 1 Hora `1h`), optimizado mediante backtesting institucional sobre los ultimos 6 meses de mercado (79.27% Win Rate, Profit Factor 2.16, +160.94% retorno neto).
 
-ARQUITECTURA DE 3 PILARES DE ENTRADA (`action: "BUY"` cuando `strategy_setup == "LONG_ENTRY"`):
-1. PILAR 1 — PULLBACK DE VALOR SOBRE EMA 200 (`entry_pillar == "P1_EMA200_PULLBACK"`):
-   - Basado en la estrategia base mejorada: Precio en zona de valor sobre la EMA 200 (`-0.6% <= dist_to_ema200_pct <= 3.5%`), con `EMA 200` en pendiente positiva y `EMA 50 >= EMA 200 * 0.994`.
-   - Retroceso a sobreventa en Estocastico (`stoch_recent_min <= 20`) girando al alza (`stoch_turning_up == true`), confluencia con `RSI(14) <= 36`, Banda Inferior de Bollinger (`bb_pct_b <= 0.12`), histograma MACD mejorando y confirmacion de vela (`BULLISH_HAMMER`, `BULLISH_ENGULFING`, `MORNING_STAR` o ruptura del maximo previo).
+ARQUITECTURA DE 4 PILARES LONG (`action: "BUY"` cuando `strategy_setup == "LONG_ENTRY"`) Y 1 PILAR SHORT (`action: "SHORT"` cuando `strategy_setup == "SHORT_ENTRY"`):
+1. PILAR 1 LONG — PULLBACK DE VALOR SOBRE EMA 200 (`entry_pillar == "P1_EMA200_PULLBACK"`):
+   - Precio en zona de valor sobre la EMA 200 (`-0.6% <= dist_to_ema200_pct <= 3.5%`), con `EMA 200` en pendiente positiva y `EMA 50 >= EMA 200 * 0.994`.
+   - Retroceso a sobreventa en Estocastico (`stoch_recent_min <= 20`) girando al alza (`stoch_turning_up == true`), confluencia con `RSI(14) <= 36`, Banda Inferior de Bollinger (`bb_pct_b <= 0.12`), histograma MACD mejorando y confirmacion de vela (`BULLISH_HAMMER`, `BULLISH_ENGULFING`, `MORNING_STAR`).
 
-2. PILAR 2 — CAPITULACION INSTITUCIONAL DE DOBLE SOBREVENTA (`entry_pillar == "P2_EXTREME_CAPITULATION"`):
-   - Permite operar y capturar ganancias con 82.1% de acierto incluso cuando el mercado general esta debajo de la EMA 200.
+2. PILAR 2 LONG — CAPITULACION INSTITUCIONAL DE DOBLE SOBREVENTA (`entry_pillar == "P2_EXTREME_CAPITULATION"`):
+   - Opera con 82.2% de acierto incluso cuando el mercado general esta debajo de la EMA 200.
    - Exige capitulacion extrema simultanea: Estocastico `<= 18` girando al alza + `RSI(14) <= 31.5` + Perforacion de Banda Inferior de Bollinger (`bb_pct_b <= 0.06`) + Climax de Volumen Institucional (`volume_ratio >= 1.30`) + MACD mejorando + Vela alcista de giro.
 
-3. PILAR 3 — SPRING / DIVERGENCIA ALCISTA EN SOPORTE DE 12H (`entry_pillar == "P3_BULLISH_DIVERGENCE_SPRING"`):
-   - Captura barridos de liquidez (Spring de Wyckoff) del soporte de 12 horas con divergencia alcista en `RSI(14)` (`bullish_divergence == true`), Estocastico `<= 18` girando al alza, Banda Inferior de Bollinger (`bb_pct_b <= 0.08`) y patron de vela alcista (`83.3%` Win Rate, Profit Factor `3.51`).
+3. PILAR 3 LONG — SPRING / DIVERGENCIA ALCISTA EN SOPORTE DE 12H (`entry_pillar == "P3_BULLISH_DIVERGENCE_SPRING"`):
+   - Captura barridos de liquidez (Spring de Wyckoff) del soporte de 12 horas con divergencia alcista en `RSI(14)` (`bullish_divergence == true`), Estocastico `<= 18` girando al alza, Banda Inferior de Bollinger (`bb_pct_b <= 0.08`) y patron de vela alcista (`83.3%` Win Rate, Profit Factor `3.82`).
 
-4. STOP-LOSS ESTRUCTURAL + BUFFER ATR Y GESTION DINAMICA (`action: "ADJUST"`):
-   - El Stop-Loss inicial se ubica en `structural_sl_price` (minimo estructural de las ultimas 3 velas menos `2.0 * ATR(14)`, acotado entre `2.6%` y `4.6%` para evitar barridos por ruido de 1H), arriesgando el 1% del capital (minimo $1 USD).
+4. PILAR 4 LONG — CONTINUACION DE TENDENCIA FUERTE EN EMA 50 (`entry_pillar == "P4_STRONG_TREND_EMA50_CONTINUATION"`):
+   - En tendencias alcistas limpias (`EMA 21 > EMA 50 > EMA 200`), captura el pullback al soporte dinamico de la `EMA 50` con Estocastico `<= 25` girando al alza y vela de giro (`87.5%` Win Rate).
+
+5. PILAR S1 SHORT (BINANCE FUTUROS USDT-M) — RECHAZO BAJISTA EN RESISTENCIA EMA 200 (`entry_pillar == "S1_EMA200_RESISTANCE_REJECT"`, `action: "SHORT"`):
+   - Cuando la tendencia macro es bajista (`Precio < EMA 200`, `EMA 50 < EMA 200` y `EMA 200` con pendiente negativa), el precio sube a testear la resistencia de la `EMA 200` (`-3.5% <= dist_to_ema200_pct <= +0.5%`), el Estocastico entra en sobrecompra (`>= 80`) girando a la baja (`stoch_turning_down == true`), `RSI >= 62`, `BB %B >= 0.85` y aparece vela bajista (`BEARISH_SHOOTING_STAR` / `BEARISH_ENGULFING`) (`78.2%` Win Rate, Profit Factor `2.00`).
+
+6. STOP-LOSS ESTRUCTURAL + BUFFER ATR Y GESTION DINAMICA (`action: "ADJUST"`):
+   - En LONG, el Stop-Loss inicial se ubica en `structural_sl_price` (minimo de 3 velas menos `2.0 * ATR(14)`). En SHORT, el Stop-Loss inicial se ubica por encima en `structural_short_sl_price` (maximo previo mas `2.0 * ATR(14)`).
    - Cuando una posicion abierta (`open_positions`) va en ganancia (`unrealized_pnl_pct > 0`):
-     - Al superar `+2.2%` de ganancia: sube `new_stop_loss_price` a Break-Even + `0.9%` para blindar la operacion.
-     - Al superar `+3.2%` de ganancia: activa Trailing Stop asegurando el `76%` del beneficio maximo alcanzado (`highest_price`) y expande `new_take_profit_price` hacia arriba para dejar correr la tendencia.
-     - Cuando el Estocastico llega a `>= 80`: solo emite `SELL` si la ganancia neta es `>= +1.7%` y aparece vela bajista (`BEARISH_SHOOTING_STAR` / `BEARISH_ENGULFING`) o agotamiento claro; de lo contrario, emite `ADJUST` apretando el Stop-Loss al `76%` de la ganancia.
+     - Al superar `+2.2%`: mueve `new_stop_loss_price` a Break-Even + `0.9%` a favor de la direccion (`LONG` o `SHORT`).
+     - Al superar `+3.2%`: activa Trailing Stop asegurando entre `76%` y `80%` del recorrido maximo y expande `new_take_profit_price`.
 
-5. Responde SIEMPRE y UNICAMENTE con un objeto JSON valido con este esquema:
+7. Responde SIEMPRE y UNICAMENTE con un objeto JSON valido con este esquema:
 {
   "market_regime": "BULLISH | BEARISH | SIDEWAYS | HIGH_VOLATILITY",
-  "summary": "Resumen ejecutivo en espanol evaluando los 3 Pilares Cuantitativos (EMA 200 Pullback, Capitulacion Extrema, Divergencia Spring) y gestion dinamica de SL/TP",
+  "summary": "Resumen ejecutivo en espanol evaluando los Pilares LONG (P1-P4) y el Pilar SHORT (S1) en Futuros USDT-M, junto con la gestion dinamica de SL/TP",
   "decisions": [
     {
       "symbol": "BTCUSDT",
-      "action": "BUY | SELL | ADJUST | HOLD",
+      "action": "BUY | SHORT | SELL | ADJUST | HOLD",
       "confidence": 88,
-      "allocation_pct": 0.35,
+      "allocation_pct": 0.65,
       "stop_loss_pct": 0.03,
       "take_profit_pct": 0.06,
       "new_stop_loss_price": 0.0,
@@ -279,7 +284,19 @@ class GeminiTradingAgent:
                         allocation_pct=max_position_pct,
                         stop_loss_pct=default_sl_pct,
                         take_profit_pct=default_tp_pct,
-                        reasoning=f"Pilar {pillar_label} activado (Stoch %K={s.stoch_k}, RSI={s.rsi_14}, BB %B={s.bb_pct_b}, Vela={s.candle_pattern}).",
+                        reasoning=f"Pilar LONG {pillar_label} activado (Stoch %K={s.stoch_k}, RSI={s.rsi_14}, BB %B={s.bb_pct_b}, Vela={s.candle_pattern}).",
+                    )
+                )
+            elif s.strategy_setup == "SHORT_ENTRY" and s.entry_pillar == "S1_EMA200_RESISTANCE_REJECT":
+                decisions.append(
+                    AIDecision(
+                        symbol=s.symbol,
+                        action="SHORT",
+                        confidence=88,
+                        allocation_pct=max_position_pct,
+                        stop_loss_pct=default_sl_pct,
+                        take_profit_pct=default_tp_pct,
+                        reasoning=f"Pilar SHORT S1_EMA200_RESISTANCE_REJECT activado para Futuros (Stoch %K={s.stoch_k}, RSI={s.rsi_14}, BB %B={s.bb_pct_b}, Vela={s.candle_pattern}).",
                     )
                 )
             else:
@@ -322,12 +339,12 @@ class GeminiTradingAgent:
         for item in parsed.get("decisions", []):
             sym = str(item.get("symbol", "")).upper().strip()
             action = str(item.get("action", "HOLD")).upper().strip()
-            if not sym or action not in ("BUY", "SELL", "ADJUST", "HOLD"):
+            if not sym or action not in ("BUY", "SHORT", "SELL", "ADJUST", "HOLD"):
                 continue
 
             confidence = int(max(0, min(100, int(item.get("confidence", 50)))))
             alloc = float(item.get("allocation_pct", max_position_pct))
-            alloc = max(0.01, min(max_position_pct, alloc)) if action == "BUY" else 1.0
+            alloc = max(0.01, min(max_position_pct, alloc)) if action in ("BUY", "SHORT") else 1.0
 
             sl_pct = float(item.get("stop_loss_pct", default_sl_pct))
             sl_pct = max(0.002, min(0.15, sl_pct))
