@@ -1,7 +1,7 @@
 # Reporte Autonomo - Estrategia Dual Spot + Futuros (EMA 200 + Estocastico + Pilares Cuantitativos 1H)
 
-- **Ultima actualizacion (UTC):** `2026-11-10T22:59:50Z`
-- **Ciclo de ejecucion:** `#31`
+- **Ultima actualizacion (UTC):** `2026-11-10T23:01:00Z`
+- **Ciclo de ejecucion:** `#32`
 - **Modo:** `CUENTA REAL DUAL (SPOT + FUTUROS USDT-M)`
 - **Temporalidad:** `1h` | **Riesgo Inicial:** `1.0% (min $1.00 USD)`
 - **Capital Total Estimado:** `14.00 USDT`
@@ -10,7 +10,7 @@
 - **Regimen de Mercado (Gemini 3.8 Flash):** `BEARISH`
 
 ## Lectura de Mercado de Gemini AI
-> El mercado de criptomonedas en temporalidad 1H se encuentra bajo un régimen BEARISH generalizado, con la mayoría de los activos cotizando por debajo de la EMA 200 y presiones bajistas acumuladas. No se cumplen los requisitos estrictos de los Pilares 1 al 4 Long debido a la tendencia macro y falta de confirmaciones de sobreventa extrema con giro alcista simultáneo. Tampoco se activa el Pilar S1 Short en los candidatos evaluados, ya que no presentan el rechazo exacto en la resistencia de la EMA 200 con sobrecompra en estocástico. Portfolio sin posiciones abiertas (open_positions_count = 0), por lo que no se requieren ajustes dinámicos de SL/TP (ADJUST). Se mantiene la disciplina de espera institucional (HOLD / WATCH).
+> Evaluacion cuantitativa completada sobre 16 pares en 1H (2 sobre EMA 200).
 
 ## Posiciones Abiertas (LONG Spot/Futuros & SHORT Futuros con SL/TP Dinamicos)
 _No hay posiciones abiertas en este momento._
@@ -21,19 +21,19 @@ _Ninguna orden o ajuste ejecutado en este ciclo._
 ## Escaneo Cuantitativo 1H (Pilares LONG P1-P4 + Pilar SHORT S1 en Futuros USDT-M)
 | Par | Precio | EMA 200 | Dist EMA | Estocastico (%K / %D) | RSI(14) | BB %B | Vela (1H) | SL (ATR) | Pilar / Setup | Decision IA |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `ZECUSDT` | 1038.8 | 1225.941969 | `-15.27%` | `27.09` / `25.38` | `32.19` | `0.177` | `BEARISH_ENGULFING` | 991.0152 | `WATCH` | HOLD |
-| `UNIUSDT` | 6.654 | 7.022221 | `-5.24%` | `14.42` / `16.28` | `35.23` | `0.12` | `BULLISH_ENGULFING` | 6.360532 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `ARBUSDT` | 0.1613 | 0.166484 | `-3.11%` | `30.5` / `25.55` | `39.55` | `0.346` | `BULLISH_ENGULFING` | 0.1538802 | `WATCH` | HOLD |
-| `QNTUSDT` | 181.62 | 194.638592 | `-6.69%` | `39.31` / `37.02` | `34.1` | `0.264` | `NONE` | 173.544172 | `WATCH` | HOLD |
-| `AAVEUSDT` | 124.11 | 129.721171 | `-4.33%` | `49.37` / `43.46` | `37.1` | `0.348` | `BULLISH_ENGULFING` | 118.984014 | `WATCH` | HOLD |
-| `XAUTUSDT` | 4025.44 | 4035.68998 | `-0.25%` | `17.96` / `16.12` | `33.72` | `0.285` | `BULLISH_HAMMER` | 3920.77856 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `BTCUSDT` | 73692.0 | 75947.96012 | `-2.97%` | `47.97` / `43.1` | `43.53` | `0.333` | `BEARISH_SHOOTING_STAR` | 71776.008 | `WATCH` | **HOLD** (75%) |
-| `TRXUSDT` | 0.318 | 0.319204 | `-0.38%` | `15.56` / `14.07` | `45.52` | `0.297` | `BEARISH_SHOOTING_STAR` | 0.309732 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `ETHUSDT` | 2048.47 | 2202.012251 | `-6.97%` | `42.6` / `39.78` | `37.56` | `0.284` | `BEARISH_SHOOTING_STAR` | 1981.523452 | `WATCH` | HOLD |
-| `PAXGUSDT` | 4028.84 | 4041.916196 | `-0.32%` | `17.73` / `16.24` | `33.93` | `0.287` | `BULLISH_ENGULFING` | 3924.09016 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `ONEUSDT` | 0.001871 | 0.001536 | `+21.85%` | `51.2` / `54.23` | `61.83` | `0.71` | `BULLISH_ENGULFING` | 0.00178493 | `WATCH` | HOLD |
-| `SOLUSDT` | 82.92 | 89.530121 | `-7.38%` | `38.07` / `36.18` | `34.96` | `0.255` | `BEARISH_SHOOTING_STAR` | 80.311904 | `WATCH` | HOLD |
-| `XRPUSDT` | 1.0581 | 1.166898 | `-9.32%` | `42.81` / `44.06` | `38.67` | `0.272` | `BEARISH_SHOOTING_STAR` | 1.02478024 | `WATCH` | HOLD |
-| `PEPEUSDT` | 5.3e-06 | 5e-06 | `+5.24%` | `31.37` / `31.37` | `53.01` | `0.517` | `BULLISH_ENGULFING` | 5.06e-06 | `WATCH` | HOLD |
-| `NEARUSDT` | 3.555 | 3.775838 | `-5.85%` | `33.22` / `34.84` | `45.97` | `0.271` | `BULLISH_ENGULFING` | 3.39147 | `WATCH` | HOLD |
-| `GRAMUSDT` | 1.138 | 1.103366 | `+3.14%` | `78.7` / `76.82` | `66.23` | `0.995` | `MORNING_STAR` | 1.085652 | `WATCH` | HOLD |
+| `ZECUSDT` | 1033.49 | 1223.460246 | `-15.53%` | `24.07` / `25.79` | `31.42` | `0.189` | `BEARISH_ENGULFING` | 985.94946 | `WATCH` | **HOLD** (70%) |
+| `SOLUSDT` | 82.82 | 89.42696 | `-7.39%` | `36.68` / `37.24` | `34.32` | `0.262` | `BEARISH_ENGULFING` | 80.567296 | `WATCH` | **HOLD** (70%) |
+| `NEARUSDT` | 3.55 | 3.773061 | `-5.91%` | `32.31` / `33.71` | `45.52` | `0.264` | `BEARISH_ENGULFING` | 3.3867 | `WATCH` | **HOLD** (70%) |
+| `UNIUSDT` | 6.634 | 7.014655 | `-5.43%` | `11.19` / `14.66` | `34.24` | `0.132` | `BEARISH_ENGULFING` | 6.3613328 | `EXIT_SHORT_STOCH_20` | **HOLD** (70%) |
+| `ARBUSDT` | 0.1611 | 0.166356 | `-3.16%` | `37.74` / `30.83` | `39.15` | `0.354` | `MORNING_STAR` | 0.1536894 | `WATCH` | **HOLD** (70%) |
+| `AAVEUSDT` | 123.74 | 129.635465 | `-4.55%` | `53.45` / `48.72` | `35.44` | `0.304` | `BEARISH_SHOOTING_STAR` | 119.269816 | `WATCH` | **HOLD** (70%) |
+| `QNTUSDT` | 181.05 | 194.460304 | `-6.90%` | `37.65` / `37.83` | `33.02` | `0.256` | `NONE` | 173.94526 | `WATCH` | **HOLD** (70%) |
+| `XAUTUSDT` | 4025.64 | 4035.453319 | `-0.24%` | `22.28` / `18.72` | `33.86` | `0.308` | `BULLISH_HAMMER` | 3920.97336 | `EXIT_SHORT_STOCH_20` | **HOLD** (70%) |
+| `BTCUSDT` | 73615.37 | 75926.438569 | `-3.04%` | `46.49` / `46.06` | `42.62` | `0.32` | `BEARISH_ENGULFING` | 71701.37038 | `WATCH` | **HOLD** (70%) |
+| `WLDUSDT` | 0.3078 | 0.341604 | `-9.90%` | `30.42` / `28.68` | `38.59` | `0.241` | `BEARISH_SHOOTING_STAR` | 0.29463452 | `WATCH` | **HOLD** (70%) |
+| `TRXUSDT` | 0.318 | 0.319095 | `-0.34%` | `16.67` / `15.19` | `45.52` | `0.294` | `BULLISH_HAMMER` | 0.309732 | `EXIT_SHORT_STOCH_20` | **HOLD** (70%) |
+| `ETHUSDT` | 2044.8 | 2200.432353 | `-7.07%` | `40.16` / `41.19` | `36.6` | `0.281` | `NONE` | 1989.87936 | `WATCH` | **HOLD** (70%) |
+| `PAXGUSDT` | 4028.85 | 4041.757961 | `-0.32%` | `21.96` / `18.57` | `33.93` | `0.308` | `BULLISH_ENGULFING` | 3924.0999 | `EXIT_SHORT_STOCH_20` | **HOLD** (70%) |
+| `ONEUSDT` | 0.001855 | 0.001537 | `+20.66%` | `49.03` / `51.36` | `60.33` | `0.669` | `NONE` | 0.00176967 | `WATCH` | **HOLD** (70%) |
+| `XRPUSDT` | 1.0552 | 1.165356 | `-9.45%` | `43.77` / `43.27` | `37.37` | `0.257` | `BEARISH_ENGULFING` | 1.02523232 | `WATCH` | **HOLD** (70%) |
+| `PEPEUSDT` | 5.28e-06 | 5e-06 | `+4.92%` | `33.33` / `31.15` | `51.69` | `0.423` | `MORNING_STAR` | 5.04e-06 | `WATCH` | **HOLD** (70%) |
