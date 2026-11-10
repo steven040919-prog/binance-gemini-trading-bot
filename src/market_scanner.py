@@ -586,6 +586,44 @@ class MarketScanner:
                 ):
                     entry_pillar = "S1_EMA200_RESISTANCE_REJECT"
 
+                # === ESTRATEGIA ALTA FRECUENCIA 15 MINUTOS (SCALPER M15 MOMENTUM PULLBACK EN BINANCE) ===
+                # Solicita velas M15 para capturar giros rapidos intradia sin esperar 1H
+                m15_long_signal = False
+                m15_short_signal = False
+                m15_structural_sl = 0.0
+                try:
+                    candles_m15 = self.client.get_klines(symbol, interval="15m", limit=45)
+                    if len(candles_m15) >= 30:
+                        closes_m15 = [c["close"] for c in candles_m15]
+                        e9_m15 = calc_ema_series(closes_m15, 9)[-1]
+                        e21_m15 = calc_ema_series(closes_m15, 21)[-1]
+                        e50_m15 = calc_ema_series(closes_m15, 50)[-1]
+                        raw_k15, _ = calc_stochastic(candles_m15, 14, 3, 3)
+                        k15 = raw_k15[-1] if raw_k15 else 50.0
+                        k15_prev = raw_k15[-2] if len(raw_k15) >= 2 else k15
+                        rsi_15 = calc_rsi(closes_m15, 14)
+
+                        trs_15 = [
+                            max(candles_m15[k]["high"] - candles_m15[k]["low"], abs(candles_m15[k]["high"] - candles_m15[k - 1]["close"]), abs(candles_m15[k]["low"] - candles_m15[k - 1]["close"]))
+                            for k in range(len(candles_m15) - 14, len(candles_m15))
+                        ]
+                        atr_m15 = sum(trs_15) / len(trs_15) if trs_15 else (current_price * 0.002)
+
+                        # Scalper M15 LONG: Macro H1 sobre EMA 200 + M15 en abanico (EMA 9 > 21 > 50) + Pullback y giro estocastico al alza
+                        m15_bull_align = above_ema_200 and (e9_m15 > e21_m15 > e50_m15) and current_price >= e21_m15 * 0.9995 and candles_m15[-1]["low"] <= e9_m15 * 1.0003
+                        m15_long_signal = m15_bull_align and (25.0 <= k15 <= 52.0) and (k15 > k15_prev) and (48.0 <= rsi_15 <= 64.0) and (candles_m15[-1]["close"] > candles_m15[-1]["open"] or is_bull_pattern)
+
+                        # Scalper M15 SHORT: Macro H1 bajo EMA 200 + M15 en abanico bajista (EMA 9 < 21 < 50) + Pullback y giro estocastico a la baja
+                        m15_bear_align = (not above_ema_200) and (e9_m15 < e21_m15 < e50_m15) and current_price <= e21_m15 * 1.0005 and candles_m15[-1]["high"] >= e9_m15 * 0.9997
+                        m15_short_signal = m15_bear_align and (48.0 <= k15 <= 75.0) and (k15 < k15_prev) and (36.0 <= rsi_15 <= 52.0) and (candles_m15[-1]["close"] < candles_m15[-1]["open"] or is_bear_pattern)
+
+                        if m15_long_signal:
+                            m15_structural_sl = round(current_price - (1.35 * atr_m15), 6)
+                        elif m15_short_signal:
+                            m15_structural_sl = round(current_price + (1.35 * atr_m15), 6)
+                except Exception as m15_exc:
+                    logger.debug("No se pudo obtener M15 para %s en Binance: %s", symbol, m15_exc)
+
                 is_oversold_zone = (stoch_k <= self.stoch_oversold) or (stoch_recent_min <= self.stoch_oversold and stoch_k <= 35.0)
                 is_overbought_zone = (stoch_k >= self.stoch_overbought) or (stoch_recent_max >= self.stoch_overbought and stoch_k >= 65.0)
 
@@ -604,6 +642,14 @@ class MarketScanner:
                     if entry_pillar == "NONE":
                         entry_pillar = "S1_EMA200_RESISTANCE_REJECT"
                     strategy_setup = "SHORT_ENTRY"
+                elif m15_long_signal:
+                    entry_pillar = "M15_SCALPER_PULLBACK_LONG"
+                    strategy_setup = "LONG_ENTRY"
+                    structural_sl = m15_structural_sl
+                elif m15_short_signal:
+                    entry_pillar = "M15_SCALPER_PULLBACK_SHORT"
+                    strategy_setup = "SHORT_ENTRY"
+                    structural_short_sl = m15_structural_sl
                 elif stoch_k >= self.stoch_overbought or stoch_d >= self.stoch_overbought:
                     strategy_setup = "EXIT_LONG_STOCH_80"
                 elif stoch_k <= self.stoch_oversold or stoch_d <= self.stoch_oversold:
