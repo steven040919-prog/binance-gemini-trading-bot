@@ -29,6 +29,14 @@ EXCLUDED_BASE_ASSETS = {
     "KORUB",
     "QQQB",
     "NVDB",
+    "NVDAB",
+    "CRCLB",
+    "AAPLB",
+    "MSTRB",
+    "AMZNB",
+    "GOOGLB",
+    "METAB",
+    "COINB",
     "TSLAB",
     "TST",
     "PYUSD",
@@ -511,12 +519,12 @@ class MarketScanner:
                 ):
                     entry_pillar = "P1_EMA200_PULLBACK"
 
-                # PILAR 2: Capitulacion Institucional de Doble Sobreventa + Climax de Volumen (82.1% WR, PF 2.50; opera incluso bajo EMA 200)
+                # PILAR 2: Capitulacion Institucional de Doble Sobreventa (82.1% WR, PF 2.50; opera incluso bajo EMA 200)
                 elif (
                     stoch_recent_min <= 18.0
                     and min_recent_rsi <= 31.5
-                    and min_recent_bb <= 0.06
-                    and vol_ratio >= 1.30
+                    and min_recent_bb <= 0.08
+                    and (vol_ratio >= 1.15 or is_bull_pattern)
                     and stoch_turning_up
                     and macd_improving
                     and is_bull_candle

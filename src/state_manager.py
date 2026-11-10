@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -91,6 +92,7 @@ class BotState:
     daily_start_equity_usdt: float = 0.0
     last_equity_usdt: float = 0.0
     total_cycles: int = 0
+    last_runner_source: str = "LOCAL_PC"
     positions: dict[str, PositionState] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +102,7 @@ class BotState:
             "daily_start_equity_usdt": round(self.daily_start_equity_usdt, 4),
             "last_equity_usdt": round(self.last_equity_usdt, 4),
             "total_cycles": self.total_cycles,
+            "last_runner_source": self.last_runner_source,
             "positions": {sym: asdict(pos) for sym, pos in self.positions.items()},
         }
 
@@ -132,6 +135,7 @@ class BotState:
             daily_start_equity_usdt=float(data.get("daily_start_equity_usdt", 0.0)),
             last_equity_usdt=float(data.get("last_equity_usdt", 0.0)),
             total_cycles=int(data.get("total_cycles", 0)),
+            last_runner_source=str(data.get("last_runner_source", "LOCAL_PC")),
             positions=positions,
         )
 
@@ -157,6 +161,7 @@ class StateManager:
 
     def save_state(self, state: BotState) -> None:
         state.updated_at = utc_now_iso()
+        state.last_runner_source = "CLOUD_GITHUB" if os.getenv("GITHUB_ACTIONS") == "true" else "LOCAL_PC"
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.state_file.write_text(
             json.dumps(state.to_dict(), indent=2, ensure_ascii=False) + "\n",

@@ -1,0 +1,51 @@
+[
+  {
+    "timestamp": "2026-11-10T18:15:03.925357+00:00",
+    "ticket": 395129575,
+    "symbol": "ETHUSDm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 2023.26,
+    "sl": 2009.76,
+    "tp": 2103.63,
+    "risk_usd": 1.35,
+    "reason": "Pilar P2_EXTREME_OVERSOLD_LONG (BULLISH_ENGULFING, Stoch %K=15.08, RSI=27.09, Riesgo ~$1.35 USD)"
+  },
+  {
+    "timestamp": "2026-11-10T22:02:54.833368+00:00",
+    "ticket": 395129575,
+    "symbol": "ETHUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 2009.76,
+    "new_sl": 2033.15,
+    "old_tp": 2103.63,
+    "new_tp": 2103.63,
+    "profit_usd": 3.15,
+    "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-10T22:04:06.960201+00:00",
+    "ticket": 395129575,
+    "symbol": "ETHUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 2033.15,
+    "new_sl": 2045.08,
+    "old_tp": 2103.63,
+    "new_tp": 2103.63,
+    "profit_usd": 3.21,
+    "reason": "Break-Even+0.35ATR | Trailing 68% del pico"
+  },
+  {
+    "timestamp": "2026-11-10T22:09:07.585938+00:00",
+    "ticket": 395129575,
+    "symbol": "ETHUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 2045.08,
+    "new_sl": 2045.92,
+    "old_tp": 2103.63,
+    "new_tp": 2103.63,
+    "profit_usd": 3.33,
+    "reason": "Trailing 68% del pico"
+  }
+]
