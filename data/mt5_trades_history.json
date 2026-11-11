@@ -186,5 +186,29 @@
     "new_tp": 0.82787,
     "profit_usd": 1.0,
     "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-11T06:44:39.025490+00:00",
+    "ticket": 395337222,
+    "symbol": "EURUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.11623,
+    "new_sl": 1.11561,
+    "old_tp": 1.11366,
+    "new_tp": 1.11366,
+    "profit_usd": 1.24,
+    "reason": "Break-Even SHORT+0.35ATR | Trailing SHORT 68% de caida"
+  },
+  {
+    "timestamp": "2026-11-11T06:44:39.228476+00:00",
+    "ticket": 395366512,
+    "symbol": "USDCHFm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 0.82632,
+    "new_sl": 0.8269,
+    "old_tp": 0.82787,
+    "new_tp": 0.82787,
+    "profit_usd": 1.41,
+    "reason": "Trailing 68% del pico"
   }
 ]
