@@ -47,5 +47,18 @@
     "new_tp": 2103.63,
     "profit_usd": 3.33,
     "reason": "Trailing 68% del pico"
+  },
+  {
+    "timestamp": "2026-11-11T00:04:30.696757+00:00",
+    "ticket": 395227750,
+    "symbol": "USDJPYm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 158.78799999999998,
+    "sl": 158.709,
+    "tp": 159.181,
+    "risk_usd": 0.5,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_ENGULFING, Stoch %K=85.68, RSI=70.27, Riesgo ~$0.50 USD)"
   }
 ]
