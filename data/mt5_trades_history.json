@@ -210,5 +210,31 @@
     "new_tp": 0.82787,
     "profit_usd": 1.41,
     "reason": "Trailing 68% del pico"
+  },
+  {
+    "timestamp": "2026-11-11T07:51:50.448042+00:00",
+    "ticket": 395385177,
+    "symbol": "US500m",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.14,
+    "price": 7571.41,
+    "sl": 7564.46,
+    "tp": 7622.02,
+    "risk_usd": 0.97,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=93.2, RSI=61.38, Riesgo ~$0.97 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T07:56:51.468595+00:00",
+    "ticket": 395385664,
+    "symbol": "USTECm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.05,
+    "price": 28144.91,
+    "sl": 28118.42,
+    "tp": 28475.17,
+    "risk_usd": 1.35,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=95.72, RSI=64.82, Riesgo ~$1.35 USD)"
   }
 ]
