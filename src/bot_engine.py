@@ -224,6 +224,47 @@ class AutonomousTradingBot:
                 and d.confidence >= self.config.min_ai_confidence
                 and d.symbol not in state.positions
             ]
+
+            # Respaldo cuantitativo: si la IA fue ultra-cautelosa o sufrio latencia/cuota,
+            # pero el escaner detecto pilares cuantitativos confirmados (H1 o Scalper M15),
+            # los incorporamos como candidatos para que Binance no quede inactivo.
+            existing_symbols = {d.symbol for d in entry_decisions}
+            for snap in snapshots:
+                if snap.symbol in state.positions or snap.symbol in existing_symbols:
+                    continue
+                if snap.entry_pillar in (
+                    "P1_EMA200_PULLBACK",
+                    "P2_EXTREME_CAPITULATION",
+                    "P3_BULLISH_DIVERGENCE_SPRING",
+                    "P4_STRONG_TREND_EMA50_CONTINUATION",
+                    "M15_SCALPER_PULLBACK_LONG",
+                ):
+                    from src.gemini_agent import AIDecision
+                    entry_decisions.append(
+                        AIDecision(
+                            symbol=snap.symbol,
+                            action="BUY",
+                            confidence=84,
+                            allocation_pct=self.config.max_position_pct,
+                            stop_loss_pct=self.config.stop_loss_pct,
+                            take_profit_pct=self.config.take_profit_pct,
+                            reasoning=f"Gatillo cuantitativo confirmado: Pilar {snap.entry_pillar} (Stoch %K={snap.stoch_k:.1f}, RSI={snap.rsi_14:.1f}).",
+                        )
+                    )
+                elif snap.entry_pillar in ("S1_EMA200_RESISTANCE_REJECT", "M15_SCALPER_PULLBACK_SHORT"):
+                    from src.gemini_agent import AIDecision
+                    entry_decisions.append(
+                        AIDecision(
+                            symbol=snap.symbol,
+                            action="SHORT",
+                            confidence=84,
+                            allocation_pct=self.config.max_position_pct,
+                            stop_loss_pct=self.config.stop_loss_pct,
+                            take_profit_pct=self.config.take_profit_pct,
+                            reasoning=f"Gatillo cuantitativo confirmado: Pilar SHORT {snap.entry_pillar} (Stoch %K={snap.stoch_k:.1f}, RSI={snap.rsi_14:.1f}).",
+                        )
+                    )
+
             entry_decisions.sort(key=lambda x: x.confidence, reverse=True)
 
             for dec in entry_decisions:

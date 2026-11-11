@@ -58,6 +58,7 @@ EXCLUDED_BASE_ASSETS = {
     "WBTC",
     "WBETH",
     "BNSOL",
+    "RLUSD",
 }
 
 EXCLUDED_SUFFIXES = ("UP", "DOWN", "BULL", "BEAR")

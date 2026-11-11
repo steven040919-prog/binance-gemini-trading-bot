@@ -582,9 +582,15 @@ class BinanceSpotClient:
         quantity: float = 0.0,
         reduce_only: bool = False,
         dry_run: bool = False,
+        usdt_amount: float | None = None,
     ) -> dict[str, Any]:
         """Ejecuta una orden a mercado en Binance Futuros USDT-M (LONG o SHORT)."""
+        if usdt_amount is not None:
+            usdt_margin = usdt_amount
         fut_filter = self.get_futures_symbol_filter(symbol)
+        if not fut_filter and not dry_run:
+            logger.warning("El simbolo %s no esta disponible o no tiene filtros en Binance Futuros USDT-M.", symbol)
+            return {}
         current_price = self.get_ticker_price(symbol)
 
         if quantity <= 0:

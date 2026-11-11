@@ -60,7 +60,11 @@ ARQUITECTURA DE 4 PILARES LONG (`action: "BUY"` cuando `strategy_setup == "LONG_
 5. PILAR S1 SHORT (BINANCE FUTUROS USDT-M) — RECHAZO BAJISTA EN RESISTENCIA EMA 200 (`entry_pillar == "S1_EMA200_RESISTANCE_REJECT"`, `action: "SHORT"`):
    - Cuando la tendencia macro es bajista (`Precio < EMA 200`, `EMA 50 < EMA 200` y `EMA 200` con pendiente negativa), el precio sube a testear la resistencia de la `EMA 200` (`-3.5% <= dist_to_ema200_pct <= +0.5%`), el Estocastico entra en sobrecompra (`>= 80`) girando a la baja (`stoch_turning_down == true`), `RSI >= 62`, `BB %B >= 0.85` y aparece vela bajista (`BEARISH_SHOOTING_STAR` / `BEARISH_ENGULFING`) (`78.2%` Win Rate, Profit Factor `2.00`).
 
-6. STOP-LOSS ESTRUCTURAL + BUFFER ATR Y GESTION DINAMICA (`action: "ADJUST"`):
+6. PILAR SCALPER M15 MOMENTUM PULLBACK (ALTA FRECUENCIA INTRADIA):
+   - LONG (`entry_pillar == "M15_SCALPER_PULLBACK_LONG"`, `action: "BUY"`): Macro H1 sobre EMA 200 + abanico de medias en 15m (EMA 9 > 21 > 50) + pullback a EMA 9/21 con Estocastico en zona de giro 25-52 al alza (Win Rate 57.0%, PF 1.25).
+   - SHORT (`entry_pillar == "M15_SCALPER_PULLBACK_SHORT"`, `action: "SHORT"` en Futuros USDT-M): Macro H1 bajo EMA 200 + abanico bajista en 15m (EMA 9 < 21 < 50) + pullback a EMA 9/21 con Estocastico en zona de giro 48-75 a la baja.
+
+7. STOP-LOSS ESTRUCTURAL + BUFFER ATR Y GESTION DINAMICA (`action: "ADJUST"`):
    - En LONG, el Stop-Loss inicial se ubica en `structural_sl_price` (minimo de 3 velas menos `2.0 * ATR(14)`). En SHORT, el Stop-Loss inicial se ubica por encima en `structural_short_sl_price` (maximo previo mas `2.0 * ATR(14)`).
    - Cuando una posicion abierta (`open_positions`) va en ganancia (`unrealized_pnl_pct > 0`):
      - Al superar `+2.2%`: mueve `new_stop_loss_price` a Break-Even + `0.9%` a favor de la direccion (`LONG` o `SHORT`).
@@ -297,6 +301,30 @@ class GeminiTradingAgent:
                         stop_loss_pct=default_sl_pct,
                         take_profit_pct=default_tp_pct,
                         reasoning=f"Pilar SHORT S1_EMA200_RESISTANCE_REJECT activado para Futuros (Stoch %K={s.stoch_k}, RSI={s.rsi_14}, BB %B={s.bb_pct_b}, Vela={s.candle_pattern}).",
+                    )
+                )
+            elif s.entry_pillar == "M15_SCALPER_PULLBACK_LONG":
+                decisions.append(
+                    AIDecision(
+                        symbol=s.symbol,
+                        action="BUY",
+                        confidence=84,
+                        allocation_pct=max_position_pct,
+                        stop_loss_pct=default_sl_pct,
+                        take_profit_pct=default_tp_pct,
+                        reasoning=f"Scalper M15 Pullback LONG activado (EMA 9>21>50 en 15m, Stoch %K={s.stoch_k:.1f}).",
+                    )
+                )
+            elif s.entry_pillar == "M15_SCALPER_PULLBACK_SHORT":
+                decisions.append(
+                    AIDecision(
+                        symbol=s.symbol,
+                        action="SHORT",
+                        confidence=84,
+                        allocation_pct=max_position_pct,
+                        stop_loss_pct=default_sl_pct,
+                        take_profit_pct=default_tp_pct,
+                        reasoning=f"Scalper M15 Pullback SHORT activado para Futuros (EMA 9<21<50 en 15m, Stoch %K={s.stoch_k:.1f}).",
                     )
                 )
             else:
