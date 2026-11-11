@@ -260,5 +260,18 @@
     "new_tp": 7622.02,
     "profit_usd": 1.99,
     "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-11T15:21:56.177434+00:00",
+    "ticket": 395531155,
+    "symbol": "ETHUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 2051.96,
+    "sl": 2064.96,
+    "tp": 2009.91,
+    "risk_usd": 1.3,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=41.56, RSI=43.52, Riesgo ~$1.30 USD)"
   }
 ]
