@@ -162,5 +162,29 @@
     "tp": 0.82787,
     "risk_usd": 0.58,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (NONE, Stoch %K=71.29, RSI=67.55, Riesgo ~$0.58 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T06:29:07.170330+00:00",
+    "ticket": 395337222,
+    "symbol": "EURUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.11704,
+    "new_sl": 1.11623,
+    "old_tp": 1.11366,
+    "new_tp": 1.11366,
+    "profit_usd": 0.77,
+    "reason": "Break-Even SHORT+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-11T06:39:09.167564+00:00",
+    "ticket": 395366512,
+    "symbol": "USDCHFm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 0.82562,
+    "new_sl": 0.82632,
+    "old_tp": 0.82787,
+    "new_tp": 0.82787,
+    "profit_usd": 1.0,
+    "reason": "Break-Even+0.35ATR"
   }
 ]
