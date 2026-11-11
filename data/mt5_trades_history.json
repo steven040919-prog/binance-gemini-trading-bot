@@ -85,5 +85,69 @@
     "new_tp": 159.182,
     "profit_usd": 0.99,
     "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-11T02:02:51.573351+00:00",
+    "ticket": 395301809,
+    "symbol": "BTCUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 73477.95,
+    "sl": 73617.61,
+    "tp": 71582.92,
+    "risk_usd": 1.35,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=39.01, RSI=42.61, Riesgo ~$1.35 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T02:22:17.609679+00:00",
+    "ticket": 395301809,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 73617.61,
+    "new_sl": 73247.88,
+    "old_tp": 71582.92,
+    "new_tp": 71582.92,
+    "profit_usd": 3.03,
+    "reason": "Break-Even SHORT+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-11T02:45:06.407439+00:00",
+    "ticket": 395321291,
+    "symbol": "EURUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 1.11634,
+    "sl": 1.11686,
+    "tp": 1.11274,
+    "risk_usd": 0.52,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_ENGULFING, Stoch %K=26.76, RSI=36.97, Riesgo ~$0.52 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T03:06:13.131986+00:00",
+    "ticket": 395329713,
+    "symbol": "EURJPYm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 177.35999999999999,
+    "sl": 177.236,
+    "tp": 177.803,
+    "risk_usd": 0.77,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BEARISH_ENGULFING, Stoch %K=71.59, RSI=54.44, Riesgo ~$0.77 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T03:30:22.249210+00:00",
+    "ticket": 395337222,
+    "symbol": "EURUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 1.1164500000000002,
+    "sl": 1.11704,
+    "tp": 1.11366,
+    "risk_usd": 0.59,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=32.27, RSI=37.46, Riesgo ~$0.59 USD)"
   }
 ]
