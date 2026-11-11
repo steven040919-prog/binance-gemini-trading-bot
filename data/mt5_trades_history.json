@@ -60,5 +60,18 @@
     "tp": 159.181,
     "risk_usd": 0.5,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_ENGULFING, Stoch %K=85.68, RSI=70.27, Riesgo ~$0.50 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T00:40:11.440305+00:00",
+    "ticket": 395245943,
+    "symbol": "USDJPYm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 158.771,
+    "sl": 158.682,
+    "tp": 159.182,
+    "risk_usd": 0.56,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (NONE, Stoch %K=84.91, RSI=69.67, Riesgo ~$0.56 USD)"
   }
 ]
