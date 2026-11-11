@@ -248,5 +248,17 @@
     "new_tp": 28475.17,
     "profit_usd": 2.08,
     "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-11T08:39:13.331217+00:00",
+    "ticket": 395385177,
+    "symbol": "US500m",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 7564.46,
+    "new_sl": 7576.96,
+    "old_tp": 7622.02,
+    "new_tp": 7622.02,
+    "profit_usd": 1.99,
+    "reason": "Break-Even+0.35ATR"
   }
 ]
