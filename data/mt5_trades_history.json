@@ -236,5 +236,17 @@
     "tp": 28475.17,
     "risk_usd": 1.35,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=95.72, RSI=64.82, Riesgo ~$1.35 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T08:18:16.576342+00:00",
+    "ticket": 395385664,
+    "symbol": "USTECm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 28118.42,
+    "new_sl": 28180.52,
+    "old_tp": 28475.17,
+    "new_tp": 28475.17,
+    "profit_usd": 2.08,
+    "reason": "Break-Even+0.35ATR"
   }
 ]
