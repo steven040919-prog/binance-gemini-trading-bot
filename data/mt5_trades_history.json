@@ -73,5 +73,17 @@
     "tp": 159.182,
     "risk_usd": 0.56,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (NONE, Stoch %K=84.91, RSI=69.67, Riesgo ~$0.56 USD)"
+  },
+  {
+    "timestamp": "2026-11-11T01:16:44.993457+00:00",
+    "ticket": 395245943,
+    "symbol": "USDJPYm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 158.682,
+    "new_sl": 158.821,
+    "old_tp": 159.182,
+    "new_tp": 159.182,
+    "profit_usd": 0.99,
+    "reason": "Break-Even+0.35ATR"
   }
 ]
