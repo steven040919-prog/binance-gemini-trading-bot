@@ -323,5 +323,18 @@
     "new_tp": 7631.98,
     "profit_usd": 2.69,
     "reason": "Break-Even+0.35ATR | Trailing 68% del pico"
+  },
+  {
+    "timestamp": "2026-11-11T16:14:16.023209+00:00",
+    "ticket": 395565208,
+    "symbol": "EURGBPm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 0.83565,
+    "sl": 0.83464,
+    "tp": 0.83807,
+    "risk_usd": 1.34,
+    "reason": "Pilar P1_EMA200_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=17.15, RSI=42.81, Riesgo ~$1.34 USD)"
   }
 ]
