@@ -459,5 +459,54 @@
     "new_tp": 71433.24,
     "profit_usd": 15.27,
     "reason": "Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T14:26:44.069588+00:00",
+    "ticket": 395927190,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 72366.16,
+    "new_sl": 72193.57,
+    "old_tp": 71433.24,
+    "new_tp": 71433.24,
+    "profit_usd": 17.43,
+    "reason": "Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T14:31:44.245823+00:00",
+    "ticket": 395565208,
+    "symbol": "EURGBPm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 0.83464,
+    "new_sl": 0.83581,
+    "old_tp": 0.83807,
+    "new_tp": 0.83807,
+    "profit_usd": 0.84,
+    "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-12T14:31:44.719648+00:00",
+    "ticket": 395927190,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 72193.57,
+    "new_sl": 72177.58,
+    "old_tp": 71433.24,
+    "new_tp": 71433.24,
+    "profit_usd": 17.63,
+    "reason": "Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T14:31:44.829066+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.02,
+    "price": 1.32637,
+    "sl": 1.32772,
+    "tp": 1.32251,
+    "risk_usd": 2.68,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BULLISH_HAMMER, Stoch %K=51.78, RSI=37.64, Riesgo ~$2.68 USD)"
   }
 ]
