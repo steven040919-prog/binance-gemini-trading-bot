@@ -682,5 +682,29 @@
     "new_tp": 3944.111,
     "profit_usd": 3.68,
     "reason": "Trailing 68% del pico"
+  },
+  {
+    "timestamp": "2026-11-12T17:25:32.391515+00:00",
+    "ticket": 396299353,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 71324.23,
+    "new_sl": 71833.4,
+    "old_tp": 73035.05,
+    "new_tp": 73035.05,
+    "profit_usd": 2.23,
+    "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-12T17:30:32.964371+00:00",
+    "ticket": 396299353,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 71833.4,
+    "new_sl": 71835.63,
+    "old_tp": 73035.05,
+    "new_tp": 73035.05,
+    "profit_usd": 2.38,
+    "reason": "Break-Even+0.35ATR"
   }
 ]
