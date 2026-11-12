@@ -1,9 +1,9 @@
 {
-  "updated_at": "2026-11-12T12:22:27Z",
+  "updated_at": "2026-11-12T14:05:50Z",
   "daily_date": "2026-11-12",
   "daily_start_equity_usdt": 0.0,
   "last_equity_usdt": 0.0,
-  "total_cycles": 229,
-  "last_runner_source": "CLOUD_GITHUB",
+  "total_cycles": 230,
+  "last_runner_source": "LOCAL_PC",
   "positions": {}
 }

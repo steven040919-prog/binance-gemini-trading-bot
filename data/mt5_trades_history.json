@@ -411,5 +411,29 @@
     "new_tp": 72037.33,
     "profit_usd": 11.0,
     "reason": "Break-Even SHORT+0.35ATR | Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T13:59:46.199580+00:00",
+    "ticket": 395927190,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 72707.7,
+    "new_sl": 72654.58,
+    "old_tp": 72037.33,
+    "new_tp": 72037.33,
+    "profit_usd": 11.67,
+    "reason": "Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T14:04:46.606918+00:00",
+    "ticket": 395927190,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 72654.58,
+    "new_sl": 72599.22,
+    "old_tp": 72037.33,
+    "new_tp": 72037.33,
+    "profit_usd": 12.36,
+    "reason": "Trailing SHORT 80% de caida"
   }
 ]
