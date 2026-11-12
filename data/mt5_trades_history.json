@@ -374,5 +374,30 @@
     "tp": 0.55439,
     "risk_usd": 1.4,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BULLISH_ENGULFING, Stoch %K=18.75, RSI=29.98, Riesgo ~$1.40 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T04:33:03.733069+00:00",
+    "ticket": 395871767,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32816,
+    "new_sl": 1.32685,
+    "old_tp": 1.3239,
+    "new_tp": 1.3239,
+    "profit_usd": 1.42,
+    "reason": "Break-Even SHORT+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-12T04:33:04.293275+00:00",
+    "ticket": 395927190,
+    "symbol": "BTCUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 73588.32,
+    "sl": 73904.45,
+    "tp": 72037.33,
+    "risk_usd": 3.16,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=33.26, RSI=45.98, Riesgo ~$3.16 USD)"
   }
 ]
