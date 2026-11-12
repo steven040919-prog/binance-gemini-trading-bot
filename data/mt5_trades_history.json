@@ -336,5 +336,17 @@
     "tp": 0.83807,
     "risk_usd": 1.34,
     "reason": "Pilar P1_EMA200_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=17.15, RSI=42.81, Riesgo ~$1.34 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T01:35:18.600286+00:00",
+    "ticket": 395555715,
+    "symbol": "USDCADm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.42325,
+    "new_sl": 1.42465,
+    "old_tp": 1.42743,
+    "new_tp": 1.42743,
+    "profit_usd": 0.62,
+    "reason": "Break-Even+0.35ATR"
   }
 ]
