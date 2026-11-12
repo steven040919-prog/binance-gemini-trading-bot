@@ -563,8 +563,20 @@ class ExnessMT5AutonomousBot:
         is_buy = side == "BUY"
         entry = snap.ask if is_buy else snap.bid
         order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
-        target_risk_usd = max(self.min_risk_usd, round(equity_usd * self.risk_pct, 2))
-        max_allowed_risk_usd = max(target_risk_usd, self.max_risk_usd_cap)
+
+        # Adaptación dinámica de Fase según el capital real disponible:
+        # - Fase 1 (< $28 USD): Riesgo tope $1.35 USD (cuentas de $10-$25)
+        # - Fase 2 ($28 - $60 USD): Riesgo objetivo ~$1.50 - $1.85 USD, tope $2.20 USD (permite que los SL estructurales no se ahoguen)
+        # - Fase 3 (>= $60 USD): Riesgo objetivo ~$2.20 - $3.00 USD, tope $3.50 USD
+        if equity_usd >= 60.0:
+            target_risk_usd = round(equity_usd * 0.035, 2)
+            max_allowed_risk_usd = 3.50
+        elif equity_usd >= 28.0:
+            target_risk_usd = round(equity_usd * 0.045, 2)
+            max_allowed_risk_usd = 2.20
+        else:
+            target_risk_usd = max(self.min_risk_usd, round(equity_usd * self.risk_pct, 2))
+            max_allowed_risk_usd = max(target_risk_usd, self.max_risk_usd_cap)
 
         raw_sl = snap.structural_long_sl if is_buy else snap.structural_short_sl
         loss_at_min_lot = mt5.order_calc_profit(order_type, snap.symbol, snap.min_lot, entry, raw_sl)
@@ -574,17 +586,17 @@ class ExnessMT5AutonomousBot:
         sl_price = raw_sl
 
         if abs_loss_min_lot > max_allowed_risk_usd and abs_loss_min_lot > 0:
-            # Acota la distancia del SL para que con 0.01 lote el riesgo monetario no supere max_allowed_risk_usd (~$1.25 USD)
+            # Acota la distancia del SL para que con el lote base el riesgo no supere max_allowed_risk_usd
             scale = max_allowed_risk_usd / abs_loss_min_lot
             adj_dist = max(abs(entry - raw_sl) * scale, snap.point * 35.0)
             sl_price = round(entry - adj_dist if is_buy else entry + adj_dist, snap.digits)
             recalc = mt5.order_calc_profit(order_type, snap.symbol, lot, entry, sl_price)
             risk_usd = abs(float(recalc)) if recalc is not None else max_allowed_risk_usd
         else:
-            # Si la cuenta es mas grande, escala los lotes manteniendo 1% de riesgo y <= 65% del margen libre
+            # Si el riesgo con lote minimo es inferior al objetivo, escala los lotes manteniendo margen seguro
             if abs_loss_min_lot > 0:
                 raw_lots = (target_risk_usd / abs_loss_min_lot) * snap.min_lot
-                steps = max(1, int(raw_lots / snap.lot_step))
+                steps = max(1, int(round(raw_lots / snap.lot_step)))
                 candidate_lot = round(steps * snap.lot_step, 2)
                 margin_req = mt5.order_calc_margin(order_type, snap.symbol, candidate_lot, entry) or 999999.0
                 if margin_req <= free_margin_usd * 0.65:
@@ -784,13 +796,24 @@ class ExnessMT5AutonomousBot:
         free_margin = float(acc.margin_free)
         equity = float(acc.equity)
 
+        # Capacidad de posiciones simultaneas segun Fase de capital:
+        # Fase 1 (< $28 USD): 2 posiciones
+        # Fase 2 ($28 - $60 USD): 3 posiciones simultaneas
+        # Fase 3 (>= $60 USD): 4 posiciones simultaneas
+        if equity >= 60.0:
+            effective_max_positions = 4
+        elif equity >= 28.0:
+            effective_max_positions = 3
+        else:
+            effective_max_positions = self.max_open_positions
+
         # Seleccionar candidatos con Pilar Institucional activo (LONG o SHORT)
         entry_candidates = [
             s for s in snapshots if s.strategy_setup in ("LONG_ENTRY", "SHORT_ENTRY") and s.symbol not in open_symbols
         ]
 
         for cand in entry_candidates:
-            if len(open_symbols) >= self.max_open_positions:
+            if len(open_symbols) >= effective_max_positions:
                 break
             if cand.margin_min_lot_usd > free_margin * 0.78:
                 continue
@@ -818,7 +841,8 @@ class ExnessMT5AutonomousBot:
             if trade:
                 executed_actions.append(trade)
                 open_symbols.add(cand.symbol)
-                free_margin = max(0.0, free_margin - cand.margin_min_lot_usd)
+                used_margin = cand.margin_min_lot_usd * (lot / cand.min_lot) if cand.min_lot > 0 else cand.margin_min_lot_usd
+                free_margin = max(0.0, free_margin - used_margin)
 
         self._write_markdown_report(cycle_num, acc, raw_positions, snapshots, executed_actions)
 
@@ -843,12 +867,22 @@ class ExnessMT5AutonomousBot:
         executed_actions: list[dict[str, Any]],
     ) -> None:
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        phase_str = (
+            "Fase 3 (> $60 USD) — Max 4 posiciones simultaneas"
+            if acc.equity >= 60.0
+            else (
+                "Fase 2 ($28 - $60 USD) — Max 3 posiciones simultaneas y lotaje escalable"
+                if acc.equity >= 28.0
+                else "Fase 1 ($10 - $28 USD) — Micro-lotes 0.01 base y max 2 posiciones"
+            )
+        )
         lines = [
             "# Reporte Autonomo MetaTrader 5 (Exness) - Estrategia Cuantitativa 1H (LONG & SHORT)",
             "",
             f"- **Ultima actualizacion:** `{now_str}` | **Ciclo:** `#{cycle_num}`",
             f"- **Cuenta Exness:** `{acc.login}` (`{acc.server}`) | **Apalancamiento:** `1:{acc.leverage}`",
             f"- **Balance:** `${acc.balance:.2f} USD` | **Equity:** `${acc.equity:.2f} USD` | **Margen Libre:** `${acc.margin_free:.2f} USD`",
+            f"- **Nivel de Capital:** `{phase_str}`",
             "",
             "## Posiciones Abiertas en Exness MT5",
         ]
