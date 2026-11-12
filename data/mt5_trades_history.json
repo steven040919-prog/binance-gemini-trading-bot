@@ -508,5 +508,17 @@
     "tp": 1.32251,
     "risk_usd": 2.68,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BULLISH_HAMMER, Stoch %K=51.78, RSI=37.64, Riesgo ~$2.68 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T14:48:04.082048+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32772,
+    "new_sl": 1.32589,
+    "old_tp": 1.32251,
+    "new_tp": 1.32251,
+    "profit_usd": 2.18,
+    "reason": "Break-Even SHORT+0.35ATR"
   }
 ]
