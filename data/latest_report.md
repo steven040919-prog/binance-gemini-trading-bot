@@ -1,7 +1,7 @@
 # Reporte Autonomo - Estrategia Dual Spot + Futuros (EMA 200 + Estocastico + Pilares Cuantitativos 1H)
 
-- **Ultima actualizacion (UTC):** `2026-11-12T16:28:05Z`
-- **Ciclo de ejecucion:** `#239`
+- **Ultima actualizacion (UTC):** `2026-11-12T16:43:58Z`
+- **Ciclo de ejecucion:** `#240`
 - **Modo:** `CUENTA REAL DUAL (SPOT + FUTUROS USDT-M)`
 - **Temporalidad:** `1h` | **Riesgo Inicial:** `1.0% (min $1.00 USD)`
 - **Capital Total Estimado:** `0.00 USDT`
@@ -10,7 +10,7 @@
 - **Regimen de Mercado (Gemini 3.8 Flash):** `BEARISH`
 
 ## Lectura de Mercado de Gemini AI
-> El mercado presenta una capitulación generalizada con múltiples activos testeando soportes críticos. Se activan entradas LONG bajo el Pilar 2 (Capitulación Extrema) en BTC, BNB, NBISB y XAUT, aprovechando la sobreventa extrema y el volumen institucional. La gestión de riesgo se mantiene estricta con SL estructurales basados en ATR.
+> Evaluacion cuantitativa completada sobre 16 pares en 1H (0 sobre EMA 200).
 
 ## Posiciones Abiertas (LONG Spot/Futuros & SHORT Futuros con SL/TP Dinamicos)
 _No hay posiciones abiertas en este momento._
@@ -21,19 +21,19 @@ _Ninguna orden o ajuste ejecutado en este ciclo._
 ## Escaneo Cuantitativo 1H (Pilares LONG P1-P4 + Pilar SHORT S1 en Futuros USDT-M)
 | Par | Precio | EMA 200 | Dist EMA | Estocastico (%K / %D) | RSI(14) | BB %B | Vela (1H) | SL (ATR) | Pilar / Setup | Decision IA |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `BTCUSDT` | 71851.4 | 75182.406276 | `-4.43%` | `17.11` / `14.61` | `24.93` | `0.031` | `BULLISH_HAMMER` | 69983.2636 | `P2_EXTREME_CAPITULATION` | **BUY** (92%) |
-| `ETHUSDT` | 2015.58 | 2151.987753 | `-6.34%` | `33.04` / `29.17` | `33.8` | `0.156` | `BULLISH_HAMMER` | 1950.764488 | `WATCH` | HOLD |
-| `PEPEUSDT` | 4.37e-06 | 5e-06 | `-11.59%` | `25.0` / `24.8` | `26.94` | `0.168` | `BEARISH_ENGULFING` | 4.17e-06 | `WATCH` | HOLD |
-| `INITUSDT` | 0.11999 | 0.163983 | `-26.83%` | `33.11` / `40.74` | `36.0` | `0.167` | `NONE` | 0.11447046 | `WATCH` | HOLD |
-| `ZECUSDT` | 964.55 | 1143.183065 | `-15.63%` | `35.77` / `33.8` | `39.18` | `0.135` | `BULLISH_HAMMER` | 920.1807 | `WATCH` | HOLD |
-| `NEARUSDT` | 3.431 | 3.710598 | `-7.54%` | `27.36` / `20.3` | `36.45` | `0.248` | `BULLISH_HAMMER` | 3.273174 | `WATCH` | HOLD |
-| `SOLUSDT` | 81.73 | 87.284441 | `-6.36%` | `33.16` / `26.28` | `35.65` | `0.157` | `BULLISH_ENGULFING` | 78.939822 | `WATCH` | HOLD |
-| `NBISBUSDT` | 130.26 | 141.303791 | `-7.82%` | `22.23` / `15.79` | `32.83` | `0.096` | `BULLISH_HAMMER` | 124.26804 | `P2_EXTREME_CAPITULATION` | **BUY** (85%) |
-| `UNIUSDT` | 6.085 | 6.80225 | `-10.54%` | `32.88` / `26.13` | `36.04` | `0.301` | `BULLISH_HAMMER` | 5.80509 | `WATCH` | HOLD |
-| `XRPUSDT` | 1.0266 | 1.127291 | `-8.93%` | `23.05` / `23.03` | `31.03` | `0.058` | `BULLISH_HAMMER` | 0.9968946 | `WATCH` | HOLD |
-| `BNBUSDT` | 658.3 | 688.345051 | `-4.36%` | `17.3` / `12.73` | `29.47` | `0.168` | `BULLISH_HAMMER` | 640.66214 | `P2_EXTREME_CAPITULATION` | **BUY** (89%) |
-| `ENAUSDT` | 0.1403 | 0.157115 | `-10.70%` | `33.42` / `26.62` | `29.81` | `0.265` | `BULLISH_HAMMER` | 0.1338462 | `WATCH` | HOLD |
-| `DOGEUSDT` | 0.06592 | 0.070335 | `-6.28%` | `31.08` / `25.75` | `36.79` | `0.199` | `BULLISH_ENGULFING` | 0.06314886 | `WATCH` | HOLD |
-| `ARBUSDT` | 0.1466 | 0.162599 | `-9.84%` | `37.3` / `30.83` | `30.72` | `0.237` | `BULLISH_ENGULFING` | 0.14044704 | `WATCH` | HOLD |
-| `XAUTUSDT` | 3873.48 | 4016.379035 | `-3.56%` | `11.29` / `8.52` | `21.98` | `0.047` | `BULLISH_HAMMER` | 3772.76952 | `P2_EXTREME_CAPITULATION` | **BUY** (87%) |
-| `AAVEUSDT` | 114.32 | 126.613534 | `-9.71%` | `32.79` / `23.03` | `34.87` | `0.276` | `BULLISH_HAMMER` | 109.06128 | `WATCH` | HOLD |
+| `BTCUSDT` | 71554.0 | 75179.447072 | `-4.82%` | `13.34` / `13.36` | `20.14` | `-0.038` | `BULLISH_HAMMER` | 69693.596 | `EXIT_SHORT_STOCH_20` | **HOLD** (70%) |
+| `ETHUSDT` | 2001.76 | 2151.850241 | `-6.97%` | `26.98` / `27.15` | `26.38` | `0.013` | `BULLISH_HAMMER` | 2061.749568 | `M15_SCALPER_PULLBACK_SHORT` | **SHORT** (84%) |
+| `PEPEUSDT` | 4.33e-06 | 5e-06 | `-12.39%` | `20.83` / `23.41` | `24.13` | `0.078` | `BEARISH_ENGULFING` | 4.14e-06 | `WATCH` | **HOLD** (70%) |
+| `ZECUSDT` | 949.52 | 1143.033513 | `-16.93%` | `26.86` / `30.83` | `33.71` | `-0.119` | `BULLISH_HAMMER` | 905.84208 | `WATCH` | **HOLD** (70%) |
+| `NEARUSDT` | 3.407 | 3.710359 | `-8.18%` | `23.97` / `19.17` | `32.17` | `0.182` | `BULLISH_HAMMER` | 3.250278 | `EXIT_SHORT_STOCH_20` | **HOLD** (70%) |
+| `SOLUSDT` | 81.22 | 87.279367 | `-6.94%` | `27.66` / `24.44` | `31.87` | `0.03` | `BULLISH_ENGULFING` | 83.819424 | `M15_SCALPER_PULLBACK_SHORT` | **SHORT** (84%) |
+| `UNIUSDT` | 6.036 | 6.801763 | `-11.26%` | `28.13` / `24.54` | `30.4` | `0.201` | `BULLISH_HAMMER` | 5.758344 | `WATCH` | **HOLD** (70%) |
+| `XRPUSDT` | 1.0206 | 1.127232 | `-9.46%` | `18.1` / `21.38` | `27.98` | `-0.052` | `BULLISH_HAMMER` | 0.9940644 | `EXIT_SHORT_STOCH_20` | **HOLD** (70%) |
+| `ENAUSDT` | 0.1385 | 0.157097 | `-11.84%` | `26.36` / `24.27` | `22.19` | `0.121` | `BULLISH_HAMMER` | 0.144871 | `M15_SCALPER_PULLBACK_SHORT` | **SHORT** (84%) |
+| `BNBUSDT` | 655.65 | 688.318683 | `-4.75%` | `14.42` / `11.77` | `23.37` | `0.111` | `BULLISH_HAMMER` | 638.6031 | `P2_EXTREME_CAPITULATION` | **BUY** (89%) |
+| `DOGEUSDT` | 0.06562 | 0.070332 | `-6.70%` | `27.89` / `24.69` | `32.24` | `0.119` | `BULLISH_ENGULFING` | 0.06314198 | `WATCH` | **HOLD** (70%) |
+| `XAUTUSDT` | 3869.57 | 4016.340129 | `-3.65%` | `10.27` / `8.18` | `19.86` | `0.028` | `BULLISH_HAMMER` | 3768.96118 | `P2_EXTREME_CAPITULATION` | **BUY** (89%) |
+| `ARBUSDT` | 0.1461 | 0.162594 | `-10.14%` | `35.54` / `30.24` | `29.02` | `0.197` | `BULLISH_ENGULFING` | 0.14043062 | `WATCH` | **HOLD** (70%) |
+| `AAVEUSDT` | 113.89 | 126.609255 | `-10.05%` | `31.18` / `22.49` | `32.45` | `0.242` | `BULLISH_HAMMER` | 108.65106 | `WATCH` | **HOLD** (70%) |
+| `SUIUSDT` | 0.7967 | 0.847145 | `-5.95%` | `28.04` / `22.96` | `32.85` | `0.154` | `BULLISH_ENGULFING` | 0.76439458 | `WATCH` | **HOLD** (70%) |
+| `QNTUSDT` | 162.45 | 187.407178 | `-13.32%` | `25.47` / `25.14` | `29.2` | `0.213` | `BULLISH_HAMMER` | 155.70891 | `WATCH` | **HOLD** (70%) |

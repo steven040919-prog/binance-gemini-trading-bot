@@ -631,5 +631,18 @@
     "tp": 3938.616,
     "risk_usd": 3.5,
     "reason": "Pilar P2_EXTREME_OVERSOLD_LONG (BULLISH_ENGULFING, Stoch %K=10.46, RSI=20.4, Riesgo ~$3.50 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T16:33:11.670111+00:00",
+    "ticket": 396290655,
+    "symbol": "ETHUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.12,
+    "price": 2007.15,
+    "sl": 2028.17,
+    "tp": 1956.7,
+    "risk_usd": 2.52,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=30.89, RSI=29.3, Riesgo ~$2.52 USD)"
   }
 ]
