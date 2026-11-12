@@ -770,5 +770,18 @@
     "tp": 0.83837,
     "risk_usd": 5.87,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_ENGULFING, Stoch %K=84.44, RSI=71.13, Riesgo ~$5.87 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T23:13:56.626413+00:00",
+    "ticket": 396450192,
+    "symbol": "NZDUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 0.55459,
+    "sl": 0.55496,
+    "tp": 0.55249,
+    "risk_usd": 3.7,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=23.25, RSI=35.28, Riesgo ~$3.70 USD)"
   }
 ]
