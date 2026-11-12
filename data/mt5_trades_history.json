@@ -435,5 +435,29 @@
     "new_tp": 72037.33,
     "profit_usd": 12.36,
     "reason": "Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T14:10:59.562459+00:00",
+    "ticket": 395927190,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 72599.22,
+    "new_sl": 72456.16,
+    "old_tp": 72037.33,
+    "new_tp": 71433.24,
+    "profit_usd": 14.15,
+    "reason": "Trailing SHORT 80% de caida | Expansion TP SHORT -2.0ATR"
+  },
+  {
+    "timestamp": "2026-11-12T14:21:00.104644+00:00",
+    "ticket": 395927190,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 72456.16,
+    "new_sl": 72366.16,
+    "old_tp": 71433.24,
+    "new_tp": 71433.24,
+    "profit_usd": 15.27,
+    "reason": "Trailing SHORT 80% de caida"
   }
 ]
