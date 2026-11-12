@@ -1,7 +1,7 @@
 # Reporte Autonomo - Estrategia Dual Spot + Futuros (EMA 200 + Estocastico + Pilares Cuantitativos 1H)
 
-- **Ultima actualizacion (UTC):** `2026-11-12T15:56:34Z`
-- **Ciclo de ejecucion:** `#237`
+- **Ultima actualizacion (UTC):** `2026-11-12T16:12:11Z`
+- **Ciclo de ejecucion:** `#238`
 - **Modo:** `CUENTA REAL DUAL (SPOT + FUTUROS USDT-M)`
 - **Temporalidad:** `1h` | **Riesgo Inicial:** `1.0% (min $1.00 USD)`
 - **Capital Total Estimado:** `0.00 USDT`
@@ -10,7 +10,7 @@
 - **Regimen de Mercado (Gemini 3.8 Flash):** `BEARISH`
 
 ## Lectura de Mercado de Gemini AI
-> El mercado se encuentra en un régimen netamente bajista con múltiples activos cotizando por debajo de la EMA 200 en temporalidad 1H y RSI de sobreventa generalizada. Sin embargo, se detectan configuraciones institucionales de alta probabilidad en SUIUSDT mediante el Pilar 2 (Capitulación Extrema con volumen institucional y estocástico girando al alza), por lo que se emite orden de compra (BUY). No existen posiciones abiertas actualmente para realizar ajustes de gestión dinámica de SL/TP (ADJUST).
+> El mercado de criptomonedas y activos cotizados en Binance 1H se encuentra bajo una fuerte presion bajista generalizada (Bearish), con la mayoria de los activos cotizando por debajo de sus respectivas EMA 200. Sin embargo, esto activa de manera optima el Pilar 2 LONG (Capitulacion Institucional de Doble Sobreventa) en activos lideres que muestran condiciones extremas de sobreventa con Estocastico girando al alza, RSI deprimido, perforacion de la banda inferior de Bollinger y climax de volumen institucional. Se ejecutan entradas LONG de alta probabilidad en BTCUSDT, BNBUSDT, XAUTUSDT y PAXGUSDT, mientras que el resto de candidatos se mantiene en observacion.
 
 ## Posiciones Abiertas (LONG Spot/Futuros & SHORT Futuros con SL/TP Dinamicos)
 _No hay posiciones abiertas en este momento._
@@ -21,19 +21,19 @@ _Ninguna orden o ajuste ejecutado en este ciclo._
 ## Escaneo Cuantitativo 1H (Pilares LONG P1-P4 + Pilar SHORT S1 en Futuros USDT-M)
 | Par | Precio | EMA 200 | Dist EMA | Estocastico (%K / %D) | RSI(14) | BB %B | Vela (1H) | SL (ATR) | Pilar / Setup | Decision IA |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `BTCUSDT` | 71392.49 | 75213.975982 | `-5.08%` | `10.34` / `11.54` | `18.06` | `-0.142` | `NONE` | 69536.28526 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `ETHUSDT` | 2000.22 | 2153.235068 | `-7.11%` | `25.86` / `23.87` | `24.13` | `-0.033` | `BULLISH_HAMMER` | 1948.21428 | `WATCH` | HOLD |
-| `PEPEUSDT` | 4.35e-06 | 5e-06 | `-12.16%` | `25.0` / `22.72` | `25.07` | `0.121` | `BULLISH_ENGULFING` | 4.15e-06 | `WATCH` | HOLD |
-| `NEARUSDT` | 3.391 | 3.712463 | `-8.66%` | `18.45` / `13.85` | `30.44` | `0.125` | `BULLISH_ENGULFING` | 3.235014 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `SOLUSDT` | 81.17 | 87.330391 | `-7.05%` | `22.74` / `18.47` | `27.8` | `0.022` | `BULLISH_HAMMER` | 78.966472 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `ZECUSDT` | 958.51 | 1143.553876 | `-16.18%` | `29.46` / `31.84` | `36.51` | `-0.02` | `BEARISH_SHOOTING_STAR` | 914.41854 | `WATCH` | HOLD |
-| `UNIUSDT` | 5.979 | 6.808351 | `-12.18%` | `22.99` / `18.5` | `26.04` | `0.111` | `BULLISH_ENGULFING` | 5.74863 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `XRPUSDT` | 1.0232 | 1.128229 | `-9.31%` | `21.68` / `20.67` | `29.09` | `-0.04` | `BULLISH_HAMMER` | 0.9965968 | `WATCH` | HOLD |
-| `BNBUSDT` | 652.15 | 688.666443 | `-5.30%` | `9.95` / `8.72` | `16.64` | `-0.005` | `NONE` | 635.1941 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `ENAUSDT` | 0.1388 | 0.157246 | `-11.73%` | `24.96` / `18.66` | `22.96` | `0.145` | `BULLISH_HAMMER` | 0.13266376 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `DOGEUSDT` | 0.06523 | 0.070373 | `-7.31%` | `22.74` / `21.02` | `25.7` | `0.001` | `BULLISH_HAMMER` | 0.06316322 | `WATCH` | HOLD |
-| `AAVEUSDT` | 112.63 | 126.709958 | `-11.11%` | `20.43` / `13.4` | `26.74` | `0.13` | `BULLISH_ENGULFING` | 107.899198 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `ARBUSDT` | 0.1455 | 0.162735 | `-10.59%` | `30.43` / `22.51` | `24.95` | `0.158` | `BEARISH_SHOOTING_STAR` | 0.138807 | `WATCH` | HOLD |
-| `SUIUSDT` | 0.7919 | 0.84751 | `-6.56%` | `22.11` / `17.69` | `26.55` | `0.047` | `BULLISH_HAMMER` | 0.76466144 | `P2_EXTREME_CAPITULATION` | **BUY** (85%) |
-| `XAUTUSDT` | 3866.65 | 4017.808241 | `-3.76%` | `6.58` / `9.45` | `18.51` | `-0.071` | `BULLISH_HAMMER` | 3766.1171 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `LINKUSDT` | 9.92 | 10.628669 | `-6.67%` | `27.51` / `22.0` | `30.26` | `0.161` | `BULLISH_HAMMER` | 9.567632 | `WATCH` | HOLD |
+| `BTCUSDT` | 72121.76 | 75185.096425 | `-4.07%` | `20.54` / `15.76` | `31.11` | `0.101` | `BULLISH_HAMMER` | 70246.59424 | `P2_EXTREME_CAPITULATION` | **BUY** (88%) |
+| `PEPEUSDT` | 4.38e-06 | 5e-06 | `-11.39%` | `26.04` / `25.15` | `28.3` | `0.192` | `BEARISH_ENGULFING` | 4.18e-06 | `WATCH` | HOLD |
+| `NEARUSDT` | 3.444 | 3.710727 | `-7.19%` | `29.2` / `20.91` | `38.55` | `0.285` | `BULLISH_HAMMER` | 3.285576 | `WATCH` | HOLD |
+| `NBISBUSDT` | 129.58 | 141.297024 | `-8.29%` | `21.73` / `15.63` | `31.8` | `0.082` | `BULLISH_HAMMER` | 123.61932 | `P2_EXTREME_CAPITULATION` | HOLD |
+| `UNIUSDT` | 6.098 | 6.80238 | `-10.35%` | `34.14` / `26.55` | `37.38` | `0.328` | `BULLISH_HAMMER` | 5.817492 | `WATCH` | HOLD |
+| `XRPUSDT` | 1.0328 | 1.127353 | `-8.39%` | `28.17` / `24.74` | `37.9` | `0.192` | `BULLISH_HAMMER` | 0.99698336 | `WATCH` | HOLD |
+| `BNBUSDT` | 659.13 | 688.35331 | `-4.25%` | `18.21` / `13.04` | `31.19` | `0.187` | `BULLISH_HAMMER` | 640.650354 | `P2_EXTREME_CAPITULATION` | **BUY** (85%) |
+| `ENAUSDT` | 0.1419 | 0.157131 | `-9.69%` | `39.69` / `28.71` | `39.21` | `0.406` | `BULLISH_HAMMER` | 0.1353726 | `WATCH` | HOLD |
+| `ARBUSDT` | 0.1469 | 0.162602 | `-9.66%` | `38.35` / `31.18` | `32.23` | `0.261` | `BULLISH_ENGULFING` | 0.14043936 | `WATCH` | HOLD |
+| `XAUTUSDT` | 3874.56 | 4016.389781 | `-3.53%` | `11.57` / `8.61` | `22.55` | `0.053` | `BULLISH_HAMMER` | 3773.82144 | `P2_EXTREME_CAPITULATION` | **BUY** (89%) |
+| `AAVEUSDT` | 114.24 | 126.612738 | `-9.77%` | `32.49` / `22.93` | `34.43` | `0.269` | `BULLISH_HAMMER` | 108.98496 | `WATCH` | HOLD |
+| `SUIUSDT` | 0.8006 | 0.847184 | `-5.50%` | `31.2` / `24.01` | `37.41` | `0.231` | `BULLISH_ENGULFING` | 0.76462668 | `WATCH` | HOLD |
+| `QNTUSDT` | 163.81 | 187.42071 | `-12.60%` | `31.54` / `27.16` | `34.21` | `0.312` | `BULLISH_HAMMER` | 156.27474 | `WATCH` | HOLD |
+| `INJUSDT` | 7.497 | 7.859435 | `-4.61%` | `38.25` / `32.21` | `43.84` | `0.48` | `BULLISH_ENGULFING` | 7.152138 | `WATCH` | HOLD |
+| `AVAXUSDT` | 8.374 | 8.446409 | `-0.86%` | `25.6` / `21.05` | `40.26` | `0.154` | `BULLISH_ENGULFING` | 8.0233004 | `WATCH` | HOLD |
+| `PAXGUSDT` | 3876.92 | 4021.29992 | `-3.59%` | `11.55` / `8.74` | `21.82` | `0.055` | `BULLISH_HAMMER` | 3776.12008 | `P2_EXTREME_CAPITULATION` | **BUY** (89%) |

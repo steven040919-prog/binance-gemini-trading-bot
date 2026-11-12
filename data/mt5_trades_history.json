@@ -605,5 +605,31 @@
     "new_tp": 1.31986,
     "profit_usd": 7.4,
     "reason": "Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T16:06:39.997452+00:00",
+    "ticket": 396275086,
+    "symbol": "BTCUSDm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 71879.26,
+    "sl": 71524.73,
+    "tp": 73175.5,
+    "risk_usd": 3.5,
+    "reason": "Pilar P2_EXTREME_OVERSOLD_LONG (BULLISH_HAMMER, Stoch %K=18.59, RSI=27.47, Riesgo ~$3.50 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T16:06:40.113663+00:00",
+    "ticket": 396275096,
+    "symbol": "XAUUSDm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 3873.429,
+    "sl": 3869.866,
+    "tp": 3938.616,
+    "risk_usd": 3.5,
+    "reason": "Pilar P2_EXTREME_OVERSOLD_LONG (BULLISH_ENGULFING, Stoch %K=10.46, RSI=20.4, Riesgo ~$3.50 USD)"
   }
 ]
