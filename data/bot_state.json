@@ -1,9 +1,9 @@
 {
-  "updated_at": "2026-11-12T02:17:17Z",
+  "updated_at": "2026-11-12T02:25:45Z",
   "daily_date": "2026-11-12",
   "daily_start_equity_usdt": 13.9986,
-  "last_equity_usdt": 14.4543,
-  "total_cycles": 175,
+  "last_equity_usdt": 0.0,
+  "total_cycles": 176,
   "last_runner_source": "LOCAL_PC",
   "positions": {}
 }
