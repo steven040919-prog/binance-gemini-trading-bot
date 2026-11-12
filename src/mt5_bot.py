@@ -51,6 +51,24 @@ DEFAULT_MT5_SYMBOLS = [
     "XAUUSDm",  # Se activa automaticamente cuando el margen libre supera ~$22 USD o apalancamiento >= 1:500
 ]
 
+# Escudo 2: Limite maximo de spread permitido para entrar (evita entrar durante latigazos de noticias de alto impacto)
+MAX_ALLOWED_SPREAD_POINTS = {
+    "EURUSDm": 16,
+    "GBPUSDm": 18,
+    "USDJPYm": 18,
+    "AUDUSDm": 16,
+    "NZDUSDm": 22,
+    "USDCADm": 24,
+    "USDCHFm": 20,
+    "EURGBPm": 22,
+    "EURJPYm": 25,
+    "US500m": 65,
+    "USTECm": 150,
+    "BTCUSDm": 950,
+    "ETHUSDm": 180,
+    "XAUUSDm": 45,  # Durante noticias el spread del Oro pasa de 20 a 70+, bloqueando entradas toxicas
+}
+
 
 @dataclass
 class MT5SymbolSnapshot:
@@ -131,6 +149,7 @@ class ExnessMT5AutonomousBot:
         self.history_file = history_file
         self.ai_agent = GeminiTradingAgent(api_key=gemini_api_key, model=gemini_model)
         self.peak_prices: dict[int, float] = {}
+        self.last_order_timestamp: float = 0.0
 
         self.report_file.parent.mkdir(parents=True, exist_ok=True)
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -625,6 +644,7 @@ class ExnessMT5AutonomousBot:
                 "reason": reason,
             }
             self._append_history(evt)
+            self.last_order_timestamp = time.time()
             return evt
 
         info = mt5.symbol_info(snap.symbol)
@@ -676,6 +696,7 @@ class ExnessMT5AutonomousBot:
             "reason": reason,
         }
         self._append_history(evt)
+        self.last_order_timestamp = time.time()
         logger.info(
             "ORDEN MT5 EJECUTADA: %s %s | Lote: %s @ %s | SL: %s | TP: %s | Riesgo: ~$%.2f USD | %s",
             side,
@@ -806,6 +827,26 @@ class ExnessMT5AutonomousBot:
                 break
             if cand.margin_min_lot_usd > free_margin * 0.78:
                 continue
+
+            # === ESCUDO 2: FILTRO DE ENSANCHAMIENTO DE SPREAD (ANTI-NOTICIAS) ===
+            max_spread = MAX_ALLOWED_SPREAD_POINTS.get(cand.symbol, 30)
+            if cand.spread_points > max_spread:
+                logger.info(
+                    "ESCUDO 2 ANTI-NOTICIAS: Entrada pausada en %s por spread ensanchado (%d > max %d). Esperando normalizacion.",
+                    cand.symbol,
+                    cand.spread_points,
+                    max_spread,
+                )
+                continue
+
+            # === ESCUDO 1: FILTRO DE CUMULO TEMPORAL (SPACING DE 8 MINUTOS) ===
+            elapsed_since_last_entry = time.time() - self.last_order_timestamp
+            if self.last_order_timestamp > 0 and elapsed_since_last_entry < 480.0:
+                logger.info(
+                    "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 8.0 min requeridos) para evitar cumulos por volatilidad.",
+                    elapsed_since_last_entry / 60.0,
+                )
+                break
 
             side = "BUY" if cand.strategy_setup == "LONG_ENTRY" else "SELL"
             lot, sl_price, tp_price, risk_usd = self.calculate_safe_lot_and_sl(
