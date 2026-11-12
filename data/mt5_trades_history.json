@@ -732,5 +732,17 @@
     "tp": 70174.87,
     "risk_usd": 3.5,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_ENGULFING, Stoch %K=21.83, RSI=25.05, Riesgo ~$3.50 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T19:04:57.050470+00:00",
+    "ticket": 396361296,
+    "symbol": "BTCUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 71990.96,
+    "new_sl": 71468.52,
+    "old_tp": 70174.87,
+    "new_tp": 70174.87,
+    "profit_usd": 1.81,
+    "reason": "Break-Even SHORT+0.35ATR"
   }
 ]
