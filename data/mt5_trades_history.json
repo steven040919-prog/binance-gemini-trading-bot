@@ -556,5 +556,54 @@
     "new_tp": 1.32251,
     "profit_usd": 3.82,
     "reason": "Trailing SHORT 68% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T15:14:52.471773+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32507,
+    "new_sl": 1.32457,
+    "old_tp": 1.32251,
+    "new_tp": 1.32251,
+    "profit_usd": 4.5,
+    "reason": "Trailing SHORT 80% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T15:19:52.650639+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32457,
+    "new_sl": 1.32356,
+    "old_tp": 1.32251,
+    "new_tp": 1.31986,
+    "profit_usd": 7.02,
+    "reason": "Trailing SHORT 80% de caida | Expansion TP SHORT -2.0ATR"
+  },
+  {
+    "timestamp": "2026-11-12T15:19:52.824000+00:00",
+    "ticket": 396244459,
+    "symbol": "EURGBPm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.04,
+    "price": 0.83606,
+    "sl": 0.83545,
+    "tp": 0.83752,
+    "risk_usd": 3.23,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=67.37, RSI=54.99, Riesgo ~$3.23 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T15:24:53.068555+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32356,
+    "new_sl": 1.32341,
+    "old_tp": 1.31986,
+    "new_tp": 1.31986,
+    "profit_usd": 7.4,
+    "reason": "Trailing SHORT 80% de caida"
   }
 ]
