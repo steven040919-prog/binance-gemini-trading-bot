@@ -644,5 +644,43 @@
     "tp": 1956.7,
     "risk_usd": 2.52,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=30.89, RSI=29.3, Riesgo ~$2.52 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T16:49:04.497093+00:00",
+    "ticket": 396299353,
+    "symbol": "BTCUSDm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 71671.48,
+    "sl": 71324.23,
+    "tp": 73035.05,
+    "risk_usd": 3.5,
+    "reason": "Pilar P2_EXTREME_OVERSOLD_LONG (BEARISH_SHOOTING_STAR, Stoch %K=16.07, RSI=22.48, Riesgo ~$3.50 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T16:49:04.596142+00:00",
+    "ticket": 396299355,
+    "symbol": "XAUUSDm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 3877.504,
+    "sl": 3874.068,
+    "tp": 3944.111,
+    "risk_usd": 3.5,
+    "reason": "Pilar P2_EXTREME_OVERSOLD_LONG (BULLISH_ENGULFING, Stoch %K=11.51, RSI=22.56, Riesgo ~$3.50 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T16:54:04.753585+00:00",
+    "ticket": 396299355,
+    "symbol": "XAUUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 3874.068,
+    "new_sl": 3880.005,
+    "old_tp": 3944.111,
+    "new_tp": 3944.111,
+    "profit_usd": 3.68,
+    "reason": "Trailing 68% del pico"
   }
 ]
