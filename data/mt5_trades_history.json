@@ -719,5 +719,18 @@
     "tp": 1.42937,
     "risk_usd": 2.53,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=67.44, RSI=57.87, Riesgo ~$2.53 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T18:55:17.586858+00:00",
+    "ticket": 396361296,
+    "symbol": "BTCUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 71640.97,
+    "sl": 71990.96,
+    "tp": 70174.87,
+    "risk_usd": 3.5,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_ENGULFING, Stoch %K=21.83, RSI=25.05, Riesgo ~$3.50 USD)"
   }
 ]
