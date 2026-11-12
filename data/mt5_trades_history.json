@@ -520,5 +520,41 @@
     "new_tp": 1.32251,
     "profit_usd": 2.18,
     "reason": "Break-Even SHORT+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-12T14:58:52.541641+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32589,
+    "new_sl": 1.32529,
+    "old_tp": 1.32251,
+    "new_tp": 1.32251,
+    "profit_usd": 3.18,
+    "reason": "Break-Even SHORT+0.35ATR | Trailing SHORT 68% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T15:03:52.718602+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32529,
+    "new_sl": 1.32517,
+    "old_tp": 1.32251,
+    "new_tp": 1.32251,
+    "profit_usd": 3.54,
+    "reason": "Trailing SHORT 68% de caida"
+  },
+  {
+    "timestamp": "2026-11-12T15:08:52.932139+00:00",
+    "ticket": 396178476,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32517,
+    "new_sl": 1.32507,
+    "old_tp": 1.32251,
+    "new_tp": 1.32251,
+    "profit_usd": 3.82,
+    "reason": "Trailing SHORT 68% de caida"
   }
 ]
