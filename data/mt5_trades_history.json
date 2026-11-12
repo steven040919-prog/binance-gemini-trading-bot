@@ -706,5 +706,18 @@
     "new_tp": 73035.05,
     "profit_usd": 2.38,
     "reason": "Break-Even+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-12T18:45:42.200696+00:00",
+    "ticket": 396357512,
+    "symbol": "USDCADm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.04,
+    "price": 1.42589,
+    "sl": 1.42499,
+    "tp": 1.42937,
+    "risk_usd": 2.53,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_HAMMER, Stoch %K=67.44, RSI=57.87, Riesgo ~$2.53 USD)"
   }
 ]
