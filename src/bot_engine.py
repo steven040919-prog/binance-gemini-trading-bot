@@ -542,6 +542,9 @@ class AutonomousTradingBot:
         if state.daily_date != today or state.daily_start_equity_usdt <= 0:
             state.daily_date = today
             state.daily_start_equity_usdt = total_equity
+        # Si no hay posiciones abiertas y el saldo cambio por transferencia/retiro, reajusta el capital base
+        if len(state.positions) == 0 and total_equity < state.daily_start_equity_usdt:
+            state.daily_start_equity_usdt = total_equity
         if state.daily_start_equity_usdt <= 0:
             return 0.0
         return ((total_equity - state.daily_start_equity_usdt) / state.daily_start_equity_usdt) * 100.0

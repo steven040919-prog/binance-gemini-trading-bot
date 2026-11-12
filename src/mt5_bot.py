@@ -136,22 +136,11 @@ class ExnessMT5AutonomousBot:
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
 
     def ensure_connected(self) -> tuple[Any, Any]:
-        # Verificar primero que terminal64.exe este abierto en el escritorio del usuario
-        # para que mt5.initialize() no cree un proceso oculto en segundo plano que impida abrir la ventana
-        proc_check = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq terminal64.exe", "/NH"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        if "terminal64.exe" not in (proc_check.stdout or "").lower():
-            raise RuntimeError(
-                "MetaTrader 5 (terminal64.exe) no esta abierto en pantalla. "
-                "Abre la aplicacion MetaTrader 5 en tu escritorio para que el bot se conecte a tu ventana."
-            )
-        if not mt5.initialize():
-            raise RuntimeError(f"No se pudo inicializar MetaTrader 5: {mt5.last_error()}")
+        # Conectar a MetaTrader 5 (si no esta inicializado, conecta a la instancia oficial de Exness)
+        mt5_path = r"C:\Program Files\MetaTrader 5\terminal64.exe"
+        if not mt5.initialize(path=mt5_path):
+            if not mt5.initialize():
+                raise RuntimeError(f"No se pudo inicializar MetaTrader 5: {mt5.last_error()}")
         term = mt5.terminal_info()
         acc = mt5.account_info()
         if term is None or acc is None:
