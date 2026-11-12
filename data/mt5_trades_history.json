@@ -757,5 +757,18 @@
     "tp": 1.1015,
     "risk_usd": 6.6,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (NONE, Stoch %K=14.35, RSI=32.01, Riesgo ~$6.60 USD)"
+  },
+  {
+    "timestamp": "2026-11-12T21:21:15.147736+00:00",
+    "ticket": 396435590,
+    "symbol": "USDCHFm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 0.83558,
+    "sl": 0.83509,
+    "tp": 0.83837,
+    "risk_usd": 5.87,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (BULLISH_ENGULFING, Stoch %K=84.44, RSI=71.13, Riesgo ~$5.87 USD)"
   }
 ]
