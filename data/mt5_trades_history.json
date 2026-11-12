@@ -744,5 +744,18 @@
     "new_tp": 70174.87,
     "profit_usd": 1.81,
     "reason": "Break-Even SHORT+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-12T20:45:44.564112+00:00",
+    "ticket": 396426823,
+    "symbol": "EURUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 1.10546,
+    "sl": 1.10612,
+    "tp": 1.1015,
+    "risk_usd": 6.6,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (NONE, Stoch %K=14.35, RSI=32.01, Riesgo ~$6.60 USD)"
   }
 ]
