@@ -574,9 +574,17 @@ class ExnessMT5AutonomousBot:
 
         # Adaptación dinámica de Fase según el capital real disponible:
         # - Fase 1 (< $28 USD): Riesgo tope $1.35 USD (cuentas de $10-$25)
-        # - Fase 2 ($28 - $60 USD): Riesgo objetivo ~$1.50 - $1.85 USD, tope $2.20 USD (permite que los SL estructurales no se ahoguen)
-        # - Fase 3 (>= $60 USD): Riesgo objetivo ~$2.20 - $3.00 USD, tope $3.50 USD
-        if equity_usd >= 60.0:
+        # - Fase 2 ($28 - $60 USD): Riesgo objetivo ~$1.50 - $1.85 USD, tope $2.20 USD
+        # - Fase 3 ($60 - $150 USD): Riesgo objetivo ~$2.20 - $3.50 USD, tope $4.00 USD
+        # - Fase 4 ($150 - $400 USD): Riesgo objetivo ~$5.00 - $8.00 USD, tope $9.00 USD
+        # - Fase 5 (>= $400 USD): Cuenta Institucional Pro ($500+). Riesgo objetivo 1.8% (~$9 - $12 USD), tope $15.00 USD
+        if equity_usd >= 400.0:
+            target_risk_usd = round(equity_usd * 0.018, 2)
+            max_allowed_risk_usd = 15.00
+        elif equity_usd >= 150.0:
+            target_risk_usd = round(equity_usd * 0.025, 2)
+            max_allowed_risk_usd = 8.00
+        elif equity_usd >= 60.0:
             target_risk_usd = round(equity_usd * 0.035, 2)
             max_allowed_risk_usd = 3.50
         elif equity_usd >= 28.0:
@@ -606,8 +614,22 @@ class ExnessMT5AutonomousBot:
                 raw_lots = (target_risk_usd / abs_loss_min_lot) * snap.min_lot
                 steps = max(1, int(round(raw_lots / snap.lot_step)))
                 candidate_lot = round(steps * snap.lot_step, 2)
+
+                # Topes prudentes por activo para evitar sobre-exposicion en un solo trade
+                if snap.symbol in ("EURUSDm", "GBPUSDm", "USDJPYm", "USDCADm", "USDCHFm", "EURGBPm", "EURJPYm", "AUDUSDm", "NZDUSDm"):
+                    candidate_lot = min(candidate_lot, 0.10)  # Max 0.10 lotes (1 mini-lote) en Forex
+                elif snap.symbol == "XAUUSDm":
+                    candidate_lot = min(candidate_lot, 0.03)  # Max 0.03 en Oro
+                elif snap.symbol == "BTCUSDm":
+                    candidate_lot = min(candidate_lot, 0.03)  # Max 0.03 en Bitcoin
+                elif snap.symbol == "ETHUSDm":
+                    candidate_lot = min(candidate_lot, 1.50)  # Max 1.50 en Ethereum
+                elif snap.symbol in ("US500m", "USTECm"):
+                    candidate_lot = min(candidate_lot, 0.50)  # Max 0.50 contratos en Indices
+
                 margin_req = mt5.order_calc_margin(order_type, snap.symbol, candidate_lot, entry) or 999999.0
-                if margin_req <= free_margin_usd * 0.65:
+                max_margin_ratio = 0.35 if equity_usd >= 400.0 else 0.65
+                if margin_req <= free_margin_usd * max_margin_ratio:
                     lot = max(snap.min_lot, candidate_lot)
             recalc = mt5.order_calc_profit(order_type, snap.symbol, lot, entry, sl_price)
             risk_usd = abs(float(recalc)) if recalc is not None else abs_loss_min_lot
@@ -809,8 +831,11 @@ class ExnessMT5AutonomousBot:
         # Capacidad de posiciones simultaneas segun Fase de capital:
         # Fase 1 (< $28 USD): 2 posiciones
         # Fase 2 ($28 - $60 USD): 3 posiciones simultaneas
-        # Fase 3 (>= $60 USD): 4 posiciones simultaneas
-        if equity >= 60.0:
+        # Fase 3 ($60 - $250 USD): 4 posiciones simultaneas
+        # Fase 5 (>= $250 USD): 5 posiciones simultaneas diversificadas
+        if equity >= 250.0:
+            effective_max_positions = 5
+        elif equity >= 60.0:
             effective_max_positions = 4
         elif equity >= 28.0:
             effective_max_positions = 3
@@ -898,12 +923,20 @@ class ExnessMT5AutonomousBot:
     ) -> None:
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         phase_str = (
-            "Fase 3 (> $60 USD) — Max 4 posiciones simultaneas"
-            if acc.equity >= 60.0
+            "Fase 5 (> $400 USD) — Cuenta Institucional Pro (Max 5 posiciones, lotaje hasta 0.10, riesgo 1.8%)"
+            if acc.equity >= 400.0
             else (
-                "Fase 2 ($28 - $60 USD) — Max 3 posiciones simultaneas y lotaje escalable"
-                if acc.equity >= 28.0
-                else "Fase 1 ($10 - $28 USD) — Micro-lotes 0.01 base y max 2 posiciones"
+                "Fase 4 ($150 - $400 USD) — Crecimiento Acelerado (Max 4 posiciones)"
+                if acc.equity >= 150.0
+                else (
+                    "Fase 3 ($60 - $150 USD) — Max 4 posiciones simultaneas"
+                    if acc.equity >= 60.0
+                    else (
+                        "Fase 2 ($28 - $60 USD) — Max 3 posiciones simultaneas y lotaje escalable"
+                        if acc.equity >= 28.0
+                        else "Fase 1 ($10 - $28 USD) — Micro-lotes 0.01 base y max 2 posiciones"
+                    )
+                )
             )
         )
         lines = [
