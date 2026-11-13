@@ -884,5 +884,17 @@
     "tp": 0.83847,
     "risk_usd": 7.06,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (NONE, Stoch %K=81.98, RSI=65.8, Riesgo ~$7.06 USD)"
+  },
+  {
+    "timestamp": "2026-11-13T02:53:09.258527+00:00",
+    "ticket": 396290655,
+    "symbol": "ETHUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 2028.17,
+    "new_sl": 1994.66,
+    "old_tp": 1956.7,
+    "new_tp": 1956.7,
+    "profit_usd": 3.75,
+    "reason": "Break-Even+0.35ATR | Trailing 40% pico (lento/picado)"
   }
 ]
