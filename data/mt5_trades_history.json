@@ -1164,5 +1164,18 @@
     "new_tp": 1.10195,
     "profit_usd": 7.2,
     "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T18:17:06.108840+00:00",
+    "ticket": 396925410,
+    "symbol": "EURGBPm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 0.8348500000000001,
+    "sl": 0.83538,
+    "tp": 0.83332,
+    "risk_usd": 7.0,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (NONE, Stoch %K=42.98, RSI=44.1, Riesgo ~$7.00 USD)"
   }
 ]
