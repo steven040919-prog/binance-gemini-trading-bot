@@ -896,5 +896,17 @@
     "new_tp": 1956.7,
     "profit_usd": 3.75,
     "reason": "Break-Even+0.35ATR | Trailing 40% pico (lento/picado)"
+  },
+  {
+    "timestamp": "2026-11-13T03:19:03.311291+00:00",
+    "ticket": 396290655,
+    "symbol": "ETHUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1994.66,
+    "new_sl": 1991.45,
+    "old_tp": 1956.7,
+    "new_tp": 1956.7,
+    "profit_usd": 4.71,
+    "reason": "Trailing 40% pico (lento/picado)"
   }
 ]
