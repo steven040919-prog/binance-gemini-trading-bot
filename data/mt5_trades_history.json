@@ -958,5 +958,17 @@
     "tp": 160.374,
     "risk_usd": 9.79,
     "reason": "Pilar M15_SCALPER_PULLBACK_LONG (NONE, Stoch %K=45.86, RSI=57.7, Riesgo ~$9.79 USD)"
+  },
+  {
+    "timestamp": "2026-11-13T09:30:49.146499+00:00",
+    "ticket": 396533215,
+    "symbol": "NZDUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 0.55412,
+    "new_sl": 0.55404,
+    "old_tp": 0.55225,
+    "new_tp": 0.55225,
+    "profit_usd": 7.0,
+    "reason": "Trailing 40% pico (tendencia)"
   }
 ]
