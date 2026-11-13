@@ -1,27 +1,29 @@
 # Reporte Autonomo MetaTrader 5 (Exness) - Estrategia Cuantitativa 1H (LONG & SHORT)
 
-- **Ultima actualizacion:** `2026-11-13 13:44:22 UTC` | **Ciclo:** `#76`
+- **Ultima actualizacion:** `2026-11-13 13:54:05 UTC` | **Ciclo:** `#79`
 - **Cuenta Exness:** `478600800` (`Exness-MT5Real11`) | **Apalancamiento:** `1:200`
-- **Balance:** `$542.03 USD` | **Equity:** `$542.03 USD` | **Margen Libre:** `$542.03 USD`
+- **Balance:** `$542.03 USD` | **Equity:** `$540.83 USD` | **Margen Libre:** `$485.57 USD`
 - **Nivel de Capital:** `Fase 5 (> $400 USD) — Cuenta Institucional Pro (Max 5 posiciones, lotaje hasta 0.10, riesgo 1.8%)`
 
 ## Posiciones Abiertas en Exness MT5
-_No hay posiciones abiertas en este momento._
+| Ticket | Simbolo | Tipo | Lote | Apertura | Precio Actual | SL Actual | TP Actual | PnL ($ USD) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `396765140` | `EURUSDm` | **SELL (SHORT)** | 0.1 | 1.1051900000000001 | 1.10531 | **1.10612** | **1.10195** | **$-1.20** |
 
 ## Escaneo en Vivo MetaTrader 5 (1H - Forex, Indices y Cripto compatibles con tu margen)
 | Simbolo | Bid / Ask | Spread | Margen (0.01) | EMA 200 | Dist (ATR) | Stoch (%K/%D) | RSI(14) | BB %B | Patron 1H | Pilar / Setup |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `EURUSDm` | 1.10598 | `8` | `$5.53` | 1.11449 | `-7.87x` | `34.62`/`27.86` | `46.43` | `0.66` | `BULLISH_HAMMER` | **`WATCH`** |
-| `GBPUSDm` | 1.32403 | `10` | `$6.62` | 1.33431 | `-8.06x` | `51.53`/`44.04` | `49.56` | `0.945` | `BULLISH_ENGULFING` | **`WATCH`** |
-| `USDJPYm` | 159.898 | `10` | `$5.00` | 158.784 | `+7.13x` | `56.78`/`54.14` | `53.76` | `0.577` | `BEARISH_ENGULFING` | **`WATCH`** |
-| `AUDUSDm` | 0.67979 | `9` | `$3.40` | 0.68926 | `-9.15x` | `32.03`/`28.07` | `43.72` | `0.419` | `BULLISH_ENGULFING` | **`WATCH`** |
-| `NZDUSDm` | 0.55383 | `14` | `$2.77` | 0.5587 | `-7.01x` | `36.71`/`26.18` | `42.96` | `0.372` | `BULLISH_ENGULFING` | **`WATCH`** |
-| `USDCADm` | 1.42468 | `16` | `$5.00` | 1.41402 | `+11.01x` | `39.03`/`55.88` | `44.27` | `-0.154` | `NONE` | **`WATCH`** |
-| `USDCHFm` | 0.83762 | `13` | `$5.00` | 0.82605 | `+11.56x` | `84.43`/`88.56` | `66.54` | `0.89` | `BEARISH_ENGULFING` | **`EXIT_LONG`** |
-| `EURGBPm` | 0.83522 | `13` | `$5.53` | 0.83518 | `+0.11x` | `29.03`/`37.88` | `43.9` | `0.311` | `BEARISH_ENGULFING` | **`WATCH`** |
-| `EURJPYm` | 176.843 | `16` | `$5.53` | 176.961 | `-0.63x` | `44.7`/`39.89` | `49.99` | `0.695` | `NONE` | **`WATCH`** |
-| `US500m` | 7642.67 | `40` | `$5.35` | 7578.9 | `+3.86x` | `74.93`/`66.71` | `63.04` | `1.009` | `BULLISH_ENGULFING` | **`WATCH`** |
-| `USTECm` | 28429.99 | `112` | `$7.11` | 28133.78 | `+2.59x` | `55.67`/`47.36` | `56.99` | `0.748` | `BULLISH_ENGULFING` | **`WATCH`** |
-| `BTCUSDm` | 69837.92 | `640` | `$3.49` | 74044.15 | `-5.18x` | `49.15`/`45.24` | `43.66` | `0.476` | `BULLISH_ENGULFING` | **`WATCH`** |
-| `ETHUSDm` | 1977.92 | `100` | `$0.99` | 2114.5 | `-5.27x` | `56.68`/`49.94` | `49.42` | `0.541` | `BULLISH_ENGULFING` | **`WATCH`** |
-| `XAUUSDm` | 3890.073 | `240` | `$19.45` | 4003.245 | `-7.15x` | `31.71`/`37.76` | `38.88` | `0.426` | `NONE` | **`WATCH`** |
+| `EURUSDm` | 1.10523 | `8` | `$5.53` | 1.11448 | `-8.55x` | `25.94`/`24.96` | `39.76` | `0.285` | `BEARISH_SHOOTING_STAR` | **`M15_SCALPER_PULLBACK_SHORT`** |
+| `GBPUSDm` | 1.32346 | `10` | `$6.62` | 1.3343 | `-8.50x` | `45.72`/`42.1` | `45.83` | `0.631` | `BULLISH_ENGULFING` | **`WATCH`** |
+| `USDJPYm` | 159.914 | `10` | `$5.00` | 158.784 | `+7.24x` | `57.77`/`54.47` | `54.67` | `0.646` | `BEARISH_ENGULFING` | **`M15_SCALPER_PULLBACK_LONG`** |
+| `AUDUSDm` | 0.67922 | `9` | `$3.40` | 0.68925 | `-9.69x` | `26.29`/`26.16` | `38.67` | `0.242` | `BEARISH_ENGULFING` | **`WATCH`** |
+| `NZDUSDm` | 0.55333 | `14` | `$2.77` | 0.55869 | `-7.72x` | `28.03`/`23.29` | `35.72` | `0.129` | `BEARISH_SHOOTING_STAR` | **`M15_SCALPER_PULLBACK_SHORT`** |
+| `USDCADm` | 1.42464 | `16` | `$5.00` | 1.41402 | `+10.96x` | `38.56`/`55.72` | `44.02` | `-0.169` | `NONE` | **`WATCH`** |
+| `USDCHFm` | 0.83807 | `13` | `$5.00` | 0.82605 | `+12.01x` | `87.78`/`89.68` | `70.97` | `0.973` | `BULLISH_HAMMER` | **`WATCH`** |
+| `EURGBPm` | 0.83503 | `13` | `$5.53` | 0.83518 | `-0.40x` | `23.93`/`36.18` | `41.04` | `0.181` | `BEARISH_ENGULFING` | **`WATCH`** |
+| `EURJPYm` | 176.746 | `16` | `$5.53` | 176.96 | `-1.15x` | `38.72`/`37.9` | `44.89` | `0.412` | `BEARISH_ENGULFING` | **`WATCH`** |
+| `US500m` | 7632.18 | `40` | `$5.34` | 7578.8 | `+3.23x` | `69.97`/`65.06` | `59.93` | `0.861` | `BULLISH_ENGULFING` | **`WATCH`** |
+| `USTECm` | 28364.24 | `112` | `$7.09` | 28133.12 | `+2.02x` | `49.38`/`45.26` | `53.62` | `0.56` | `BEARISH_SHOOTING_STAR` | **`WATCH`** |
+| `BTCUSDm` | 69560.69 | `640` | `$3.48` | 74041.39 | `-5.52x` | `46.83`/`44.47` | `40.11` | `0.423` | `BULLISH_ENGULFING` | **`WATCH`** |
+| `ETHUSDm` | 1968.76 | `100` | `$0.98` | 2114.41 | `-5.62x` | `54.25`/`49.13` | `45.84` | `0.483` | `BULLISH_ENGULFING` | **`WATCH`** |
+| `XAUUSDm` | 3883.526 | `240` | `$19.42` | 4003.18 | `-7.34x` | `30.4`/`37.32` | `35.98` | `0.31` | `NONE` | **`WATCH`** |
