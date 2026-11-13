@@ -845,5 +845,18 @@
     "new_tp": 0.67804,
     "profit_usd": 5.2,
     "reason": "Break-Even SHORT+0.35ATR"
+  },
+  {
+    "timestamp": "2026-11-13T01:00:58.425193+00:00",
+    "ticket": 396496407,
+    "symbol": "GBPUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 1.3230000000000002,
+    "sl": 1.32368,
+    "tp": 1.31909,
+    "risk_usd": 6.6,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_ENGULFING, Stoch %K=17.43, RSI=30.95, Riesgo ~$6.60 USD)"
   }
 ]
