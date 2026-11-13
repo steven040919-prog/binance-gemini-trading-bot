@@ -970,5 +970,30 @@
     "new_tp": 0.55225,
     "profit_usd": 7.0,
     "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T09:45:52.963928+00:00",
+    "ticket": 396676921,
+    "symbol": "AUDUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 0.6794300000000001,
+    "sl": 0.68014,
+    "tp": 0.677,
+    "risk_usd": 7.1,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_SHOOTING_STAR, Stoch %K=33.55, RSI=31.93, Riesgo ~$7.10 USD)"
+  },
+  {
+    "timestamp": "2026-11-13T09:48:53.189501+00:00",
+    "ticket": 396533215,
+    "symbol": "NZDUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 0.55404,
+    "new_sl": 0.55397,
+    "old_tp": 0.55225,
+    "new_tp": 0.55225,
+    "profit_usd": 8.8,
+    "reason": "Trailing 40% pico (tendencia)"
   }
 ]
