@@ -1031,5 +1031,17 @@
     "new_tp": 0.677,
     "profit_usd": 5.5,
     "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T11:05:49.339474+00:00",
+    "ticket": 396533215,
+    "symbol": "NZDUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 0.55391,
+    "new_sl": 0.55384,
+    "old_tp": 0.55225,
+    "new_tp": 0.55225,
+    "profit_usd": 11.9,
+    "reason": "Trailing 40% pico (tendencia)"
   }
 ]
