@@ -1101,5 +1101,17 @@
     "new_tp": 1.32,
     "profit_usd": 4.2,
     "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T12:22:19.736771+00:00",
+    "ticket": 396702495,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.32298,
+    "new_sl": 1.32285,
+    "old_tp": 1.32,
+    "new_tp": 1.32,
+    "profit_usd": 7.4,
+    "reason": "Trailing 40% pico (tendencia)"
   }
 ]
