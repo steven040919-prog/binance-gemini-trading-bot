@@ -1,7 +1,7 @@
 # Reporte Autonomo - Estrategia Dual Spot + Futuros (EMA 200 + Estocastico + Pilares Cuantitativos 1H)
 
-- **Ultima actualizacion (UTC):** `2026-11-13T19:39:14Z`
-- **Ciclo de ejecucion:** `#367`
+- **Ultima actualizacion (UTC):** `2026-11-13T19:48:47Z`
+- **Ciclo de ejecucion:** `#368`
 - **Modo:** `CUENTA REAL DUAL (SPOT + FUTUROS USDT-M)`
 - **Temporalidad:** `1h` | **Riesgo Inicial:** `1.0% (min $1.00 USD)`
 - **Capital Total Estimado:** `0.00 USDT`
@@ -10,7 +10,7 @@
 - **Regimen de Mercado (Gemini 3.8 Flash):** `BEARISH`
 
 ## Lectura de Mercado de Gemini AI
-> El mercado global en temporalidad 1H se mantiene bajo presión bajista generalizada por debajo de la EMA 200, con la mayoría de activos en régimen BEARISH. Se identifica la activación de estrategias bajo los pilares institucionales: MUBUSDT cumple los requisitos del Pilar 1 LONG (P1_EMA200_PULLBACK) al rebotar sobre la EMA 200 con patrón de giro Morning Star y Estocástico al alza; PAXGUSDT activa el Pilar de alta frecuencia M15 SHORT (M15_SCALPER_PULLBACK_SHORT) con fuerte volumen institucional en zona de resistencia. No hay posiciones abiertas actuales en el portafolio para aplicar ajustes de SL/TP dinámicos.
+> El mercado global en temporalidad 1H se encuentra bajo régimen bajista, con la mayoría de los activos cotizando por debajo de sus respectivas EMA 200 y presiones vendedoras dominantes. Se evalúan oportunidades bajo los pilares LONG (P1-P4) y SHORT (S1), destacando la activación del Pilar 1 (P1_EMA200_PULLBACK) en MUBUSDT sobre la zona de valor de la EMA 200 con patrón Morning Star, y una entrada SHORT intradía en SOLUSDT bajo el pilar M15_SCALPER_PULLBACK_SHORT. No hay posiciones abiertas previas que requieran ajuste dinámico.
 
 ## Posiciones Abiertas (LONG Spot/Futuros & SHORT Futuros con SL/TP Dinamicos)
 _No hay posiciones abiertas en este momento._
@@ -21,19 +21,19 @@ _Ninguna orden o ajuste ejecutado en este ciclo._
 ## Escaneo Cuantitativo 1H (Pilares LONG P1-P4 + Pilar SHORT S1 en Futuros USDT-M)
 | Par | Precio | EMA 200 | Dist EMA | Estocastico (%K / %D) | RSI(14) | BB %B | Vela (1H) | SL (ATR) | Pilar / Setup | Decision IA |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `ERAUSDT` | 0.0742 | 0.077818 | `-4.65%` | `5.17` / `7.44` | `32.45` | `0.117` | `BEARISH_SHOOTING_STAR` | 0.0707868 | `EXIT_SHORT_STOCH_20` | HOLD |
+| `ERAUSDT` | 0.0736 | 0.077812 | `-5.41%` | `4.83` / `7.33` | `31.4` | `0.078` | `BEARISH_SHOOTING_STAR` | 0.0702144 | `EXIT_SHORT_STOCH_20` | HOLD |
+| `BTCUSDT` | 68982.46 | 73845.553029 | `-6.59%` | `50.79` / `47.86` | `36.59` | `0.418` | `BULLISH_HAMMER` | 67188.91604 | `WATCH` | HOLD |
 | `PEPEUSDT` | 4.46e-06 | 5e-06 | `-7.74%` | `27.78` / `25.93` | `43.47` | `0.16` | `NONE` | 4.25e-06 | `WATCH` | HOLD |
-| `BTCUSDT` | 69036.53 | 73846.091039 | `-6.51%` | `51.57` / `48.12` | `37.46` | `0.436` | `BULLISH_HAMMER` | 67241.58022 | `WATCH` | HOLD |
-| `XAUTUSDT` | 3870.79 | 3989.690043 | `-2.98%` | `32.25` / `27.35` | `39.32` | `0.197` | `NONE` | 3770.14946 | `WATCH` | HOLD |
-| `MUBUSDT` | 770.03 | 763.254548 | `+0.89%` | `28.65` / `22.25` | `40.62` | `0.226` | `MORNING_STAR` | 734.973136 | `P1_EMA200_PULLBACK` | **BUY** (85%) |
-| `ETHUSDT` | 1950.59 | 2107.266129 | `-7.44%` | `50.92` / `43.87` | `43.28` | `0.496` | `MORNING_STAR` | 1882.727728 | `WATCH` | HOLD |
-| `GRAMUSDT` | 1.118 | 1.136646 | `-1.64%` | `17.86` / `21.43` | `37.13` | `0.023` | `BULLISH_ENGULFING` | 1.0796712 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `PAXGUSDT` | 3873.94 | 3993.476657 | `-2.99%` | `34.44` / `28.4` | `39.73` | `0.236` | `NONE` | 3974.66244 | `M15_SCALPER_PULLBACK_SHORT` | **SHORT** (80%) |
-| `SOLUSDT` | 80.08 | 85.527955 | `-6.37%` | `46.03` / `44.35` | `44.51` | `0.492` | `NONE` | 77.550112 | `WATCH` | HOLD |
-| `ZECUSDT` | 955.52 | 1090.467237 | `-12.38%` | `58.3` / `58.8` | `50.92` | `0.634` | `BULLISH_ENGULFING` | 911.56608 | `WATCH` | HOLD |
-| `NEARUSDT` | 3.547 | 3.624652 | `-2.14%` | `67.18` / `65.23` | `56.71` | `0.717` | `BULLISH_ENGULFING` | 3.383838 | `WATCH` | HOLD |
-| `BNBUSDT` | 638.48 | 676.800199 | `-5.66%` | `50.04` / `42.61` | `44.06` | `0.521` | `MORNING_STAR` | 618.124272 | `WATCH` | HOLD |
-| `INJUSDT` | 8.292 | 7.804458 | `+6.25%` | `87.48` / `86.8` | `74.89` | `0.89` | `BULLISH_HAMMER` | 7.910568 | `EXIT_LONG_STOCH_80` | HOLD |
-| `XRPUSDT` | 1.0288 | 1.103305 | `-6.75%` | `52.5` / `48.46` | `50.83` | `0.674` | `MORNING_STAR` | 0.98929728 | `WATCH` | HOLD |
-| `BARDUSDT` | 0.1403 | 0.109443 | `+28.19%` | `27.98` / `41.41` | `51.17` | `0.382` | `BULLISH_HAMMER` | 0.1338462 | `WATCH` | HOLD |
-| `SOXSBUSDT` | 51.28 | 55.488337 | `-7.58%` | `67.13` / `73.82` | `61.42` | `0.783` | `BULLISH_HAMMER` | 48.92112 | `WATCH` | HOLD |
+| `XAUTUSDT` | 3868.7 | 3989.669247 | `-3.03%` | `30.34` / `26.72` | `38.53` | `0.162` | `NONE` | 3768.1138 | `WATCH` | HOLD |
+| `MUBUSDT` | 768.31 | 763.237433 | `+0.66%` | `27.63` / `21.91` | `39.33` | `0.203` | `MORNING_STAR` | 735.022672 | `P1_EMA200_PULLBACK` | **BUY** (85%) |
+| `ETHUSDT` | 1949.24 | 2107.252696 | `-7.50%` | `50.39` / `43.69` | `42.69` | `0.484` | `MORNING_STAR` | 1882.755808 | `WATCH` | HOLD |
+| `GRAMUSDT` | 1.114 | 1.136606 | `-1.99%` | `15.48` / `20.64` | `35.98` | `-0.04` | `BULLISH_ENGULFING` | 1.077352 | `EXIT_SHORT_STOCH_20` | HOLD |
+| `PAXGUSDT` | 3871.95 | 3993.456856 | `-3.04%` | `32.7` / `27.82` | `38.94` | `0.203` | `NONE` | 3771.2793 | `WATCH` | HOLD |
+| `SOLUSDT` | 79.98 | 85.52696 | `-6.49%` | `45.23` / `44.08` | `43.72` | `0.465` | `NONE` | 82.467528 | `M15_SCALPER_PULLBACK_SHORT` | **SHORT** (80%) |
+| `ZECUSDT` | 960.9 | 1090.520769 | `-11.89%` | `60.34` / `59.48` | `53.15` | `0.705` | `BULLISH_ENGULFING` | 916.6986 | `WATCH` | HOLD |
+| `BNBUSDT` | 638.14 | 676.796816 | `-5.71%` | `49.6` / `42.47` | `43.63` | `0.51` | `MORNING_STAR` | 618.130596 | `WATCH` | HOLD |
+| `NEARUSDT` | 3.548 | 3.624662 | `-2.12%` | `67.29` / `65.27` | `56.81` | `0.72` | `BULLISH_ENGULFING` | 3.384792 | `WATCH` | HOLD |
+| `INJUSDT` | 8.294 | 7.804478 | `+6.27%` | `87.54` / `86.82` | `74.93` | `0.891` | `BULLISH_HAMMER` | 7.912476 | `EXIT_LONG_STOCH_80` | HOLD |
+| `XRPUSDT` | 1.0269 | 1.103286 | `-6.92%` | `50.68` / `47.86` | `49.46` | `0.619` | `MORNING_STAR` | 0.98934364 | `WATCH` | HOLD |
+| `SOXSBUSDT` | 51.57 | 55.491222 | `-7.07%` | `68.09` / `74.14` | `62.44` | `0.805` | `BULLISH_HAMMER` | 49.19778 | `WATCH` | HOLD |
+| `BARDUSDT` | 0.1389 | 0.109429 | `+26.93%` | `27.04` / `41.1` | `50.31` | `0.356` | `NONE` | 0.1325106 | `WATCH` | HOLD |

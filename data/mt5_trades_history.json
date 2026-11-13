@@ -1214,5 +1214,29 @@
     "new_tp": 0.83332,
     "profit_usd": 5.15,
     "reason": "Break-Even+0.10ATR | Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T19:45:20.858483+00:00",
+    "ticket": 396932684,
+    "symbol": "XAUUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 3878.416,
+    "new_sl": 3878.236,
+    "old_tp": 3830.523,
+    "new_tp": 3830.523,
+    "profit_usd": 4.54,
+    "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T19:48:21.059230+00:00",
+    "ticket": 396932684,
+    "symbol": "XAUUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 3878.236,
+    "new_sl": 3878.045,
+    "old_tp": 3830.523,
+    "new_tp": 3830.523,
+    "profit_usd": 5.02,
+    "reason": "Trailing 40% pico (tendencia)"
   }
 ]
