@@ -908,5 +908,18 @@
     "new_tp": 1956.7,
     "profit_usd": 4.71,
     "reason": "Trailing 40% pico (lento/picado)"
+  },
+  {
+    "timestamp": "2026-11-13T03:38:26.049647+00:00",
+    "ticket": 396598793,
+    "symbol": "USDCADm",
+    "side": "BUY",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 1.42595,
+    "sl": 1.4253,
+    "tp": 1.4288,
+    "risk_usd": 4.56,
+    "reason": "Pilar M15_SCALPER_PULLBACK_LONG (NONE, Stoch %K=66.2, RSI=55.62, Riesgo ~$4.56 USD)"
   }
 ]
