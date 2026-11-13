@@ -1,7 +1,7 @@
 # Reporte Autonomo - Estrategia Dual Spot + Futuros (EMA 200 + Estocastico + Pilares Cuantitativos 1H)
 
-- **Ultima actualizacion (UTC):** `2026-11-13T18:46:19Z`
-- **Ciclo de ejecucion:** `#361`
+- **Ultima actualizacion (UTC):** `2026-11-13T18:51:29Z`
+- **Ciclo de ejecucion:** `#362`
 - **Modo:** `CUENTA REAL DUAL (SPOT + FUTUROS USDT-M)`
 - **Temporalidad:** `1h` | **Riesgo Inicial:** `1.0% (min $1.00 USD)`
 - **Capital Total Estimado:** `0.00 USDT`
@@ -10,7 +10,7 @@
 - **Regimen de Mercado (Gemini 3.8 Flash):** `BEARISH`
 
 ## Lectura de Mercado de Gemini AI
-> El mercado se encuentra en un régimen predominantemente bajista en temporalidad 1H con la mayoría de los activos cotizando por debajo de la EMA 200. No obstante, se identifican oportunidades de alta probabilidad bajo los pilares institucionales: MUBUSDT cumple con los requisitos del Pilar 1 (Pullback sobre EMA 200 con patrón de vela alcista y Estocástico girando al alza), e INJUSDT activa el Pilar Scalper M15 Pullback Long. Los demás activos se mantienen en vigilancia o sin confirmación completa.
+> El mercado de temporalidad 1h mantiene un sesgo general bajista dominado por la EMA 200, con la gran mayoria de los activos cotizando por debajo de su media movil principal. Sin embargo, se identifican oportunidades puntuales en base a los pilares operativos y de alta frecuencia en Binance Spot y Futuros USDT-M: MUBUSDT cumple con los requisitos del Pilar 1 para LONG, mientras que activos como PEPEUSDT presentan configuraciones para operaciones en corto (SHORT) bajo la arquitectura de scalping M15.
 
 ## Posiciones Abiertas (LONG Spot/Futuros & SHORT Futuros con SL/TP Dinamicos)
 _No hay posiciones abiertas en este momento._
@@ -21,19 +21,19 @@ _Ninguna orden o ajuste ejecutado en este ciclo._
 ## Escaneo Cuantitativo 1H (Pilares LONG P1-P4 + Pilar SHORT S1 en Futuros USDT-M)
 | Par | Precio | EMA 200 | Dist EMA | Estocastico (%K / %D) | RSI(14) | BB %B | Vela (1H) | SL (ATR) | Pilar / Setup | Decision IA |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `BTCUSDT` | 68829.0 | 73869.426714 | `-6.82%` | `46.81` / `43.52` | `34.89` | `0.355` | `BULLISH_ENGULFING` | 67034.9416 | `WATCH` | HOLD |
+| `BTCUSDT` | 68917.85 | 73870.310794 | `-6.70%` | `47.93` / `43.89` | `35.68` | `0.379` | `BULLISH_ENGULFING` | 67033.20014 | `WATCH` | HOLD |
 | `ERAUSDT` | 0.075 | 0.077803 | `-3.60%` | `8.09` / `10.24` | `34.14` | `0.134` | `BEARISH_SHOOTING_STAR` | 0.07155 | `EXIT_SHORT_STOCH_20` | HOLD |
-| `GRAMUSDT` | 1.13 | 1.137293 | `-0.64%` | `24.4` / `25.12` | `41.18` | `0.233` | `BEARISH_ENGULFING` | 1.081162 | `WATCH` | HOLD |
-| `MUBUSDT` | 764.34 | 763.383265 | `+0.13%` | `19.97` / `15.15` | `36.33` | `0.123` | `BULLISH_ENGULFING` | 729.18036 | `P1_EMA200_PULLBACK` | **BUY** (88%) |
-| `XAUTUSDT` | 3874.36 | 3990.140431 | `-2.90%` | `29.17` / `23.83` | `40.78` | `0.251` | `NONE` | 3773.62664 | `WATCH` | HOLD |
-| `ETHUSDT` | 1939.45 | 2108.421332 | `-8.01%` | `41.61` / `38.7` | `38.18` | `0.378` | `BULLISH_ENGULFING` | 1874.69843 | `WATCH` | HOLD |
-| `PAXGUSDT` | 3876.27 | 3993.911282 | `-2.95%` | `29.82` / `23.93` | `40.72` | `0.267` | `NONE` | 3775.48698 | `WATCH` | HOLD |
-| `SOLUSDT` | 79.93 | 85.549211 | `-6.57%` | `42.13` / `45.23` | `43.11` | `0.434` | `BEARISH_SHOOTING_STAR` | 77.323722 | `WATCH` | HOLD |
-| `ZECUSDT` | 944.62 | 1090.538397 | `-13.38%` | `58.11` / `60.16` | `45.9` | `0.48` | `BULLISH_HAMMER` | 901.16748 | `WATCH` | HOLD |
-| `BNBUSDT` | 635.2 | 677.09079 | `-6.19%` | `39.6` / `38.06` | `39.71` | `0.399` | `NONE` | 615.8808 | `WATCH` | HOLD |
-| `NEARUSDT` | 3.506 | 3.625108 | `-3.29%` | `63.64` / `65.54` | `52.14` | `0.611` | `BEARISH_SHOOTING_STAR` | 3.344724 | `WATCH` | HOLD |
-| `XRPUSDT` | 1.0248 | 1.104025 | `-7.18%` | `47.16` / `49.97` | `47.85` | `0.529` | `BEARISH_SHOOTING_STAR` | 0.98487504 | `WATCH` | HOLD |
-| `SOXSBUSDT` | 51.71 | 55.51216 | `-6.85%` | `73.98` / `81.62` | `63.39` | `0.846` | `NONE` | 49.33134 | `EXIT_LONG_STOCH_80` | HOLD |
-| `INJUSDT` | 8.076 | 7.797664 | `+3.57%` | `84.09` / `87.31` | `67.61` | `0.789` | `NONE` | 7.704504 | `M15_SCALPER_PULLBACK_LONG` | **BUY** (85%) |
-| `PEPEUSDT` | 4.48e-06 | 5e-06 | `-7.37%` | `25.0` / `25.46` | `45.34` | `0.235` | `BULLISH_ENGULFING` | 4.27e-06 | `WATCH` | HOLD |
-| `UNIUSDT` | 5.791 | 6.584538 | `-12.05%` | `34.17` / `39.12` | `40.79` | `0.381` | `BULLISH_ENGULFING` | 5.524614 | `WATCH` | HOLD |
+| `GRAMUSDT` | 1.129 | 1.137283 | `-0.73%` | `23.81` / `24.92` | `40.7` | `0.212` | `BEARISH_ENGULFING` | 1.0811946 | `WATCH` | HOLD |
+| `MUBUSDT` | 765.68 | 763.396598 | `+0.30%` | `20.77` / `15.41` | `37.36` | `0.14` | `BULLISH_ENGULFING` | 730.45872 | `P1_EMA200_PULLBACK` | **BUY** (85%) |
+| `XAUTUSDT` | 3873.22 | 3990.129088 | `-2.93%` | `28.42` / `23.58` | `40.34` | `0.231` | `NONE` | 3772.51628 | `WATCH` | HOLD |
+| `ETHUSDT` | 1942.3 | 2108.449691 | `-7.88%` | `42.63` / `39.04` | `39.51` | `0.4` | `BULLISH_ENGULFING` | 1874.63402 | `WATCH` | HOLD |
+| `PAXGUSDT` | 3876.01 | 3993.908695 | `-2.95%` | `29.65` / `23.87` | `40.62` | `0.262` | `NONE` | 3775.23374 | `WATCH` | HOLD |
+| `SOLUSDT` | 80.15 | 85.5514 | `-6.31%` | `43.82` / `45.79` | `45.1` | `0.489` | `NONE` | 77.31831 | `WATCH` | HOLD |
+| `ZECUSDT` | 947.44 | 1090.566457 | `-13.12%` | `58.95` / `60.44` | `47.12` | `0.518` | `BULLISH_ENGULFING` | 903.85776 | `WATCH` | HOLD |
+| `BNBUSDT` | 636.31 | 677.101835 | `-6.02%` | `40.95` / `38.51` | `41.2` | `0.429` | `MORNING_STAR` | 615.85749 | `WATCH` | HOLD |
+| `NEARUSDT` | 3.518 | 3.625227 | `-2.96%` | `64.71` / `65.89` | `53.5` | `0.647` | `BEARISH_SHOOTING_STAR` | 3.356172 | `WATCH` | HOLD |
+| `XRPUSDT` | 1.026 | 1.104037 | `-7.07%` | `48.12` / `50.29` | `48.72` | `0.56` | `BEARISH_SHOOTING_STAR` | 0.9848448 | `WATCH` | HOLD |
+| `SOXSBUSDT` | 51.5 | 55.51007 | `-7.22%` | `73.28` / `81.39` | `62.43` | `0.83` | `NONE` | 49.131 | `EXIT_LONG_STOCH_80` | HOLD |
+| `INJUSDT` | 8.093 | 7.797833 | `+3.79%` | `84.59` / `87.47` | `68.76` | `0.8` | `BULLISH_HAMMER` | 7.720722 | `M15_SCALPER_PULLBACK_LONG` | HOLD |
+| `PEPEUSDT` | 4.47e-06 | 5e-06 | `-7.58%` | `23.61` / `25.0` | `44.42` | `0.181` | `BULLISH_ENGULFING` | 4.68e-06 | `M15_SCALPER_PULLBACK_SHORT` | **SHORT** (82%) |
+| `UNIUSDT` | 5.813 | 6.584757 | `-11.72%` | `36.07` / `39.76` | `42.7` | `0.426` | `BULLISH_ENGULFING` | 5.545602 | `WATCH` | HOLD |
