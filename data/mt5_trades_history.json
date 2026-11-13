@@ -1065,5 +1065,41 @@
     "tp": 1.32,
     "risk_usd": 9.5,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (NONE, Stoch %K=43.44, RSI=41.94, Riesgo ~$9.50 USD)"
+  },
+  {
+    "timestamp": "2026-11-13T12:12:57.487922+00:00",
+    "ticket": 396674795,
+    "symbol": "USDJPYm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 159.768,
+    "new_sl": 159.966,
+    "old_tp": 160.374,
+    "new_tp": 160.374,
+    "profit_usd": 3.43,
+    "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T12:15:57.620888+00:00",
+    "ticket": 396674795,
+    "symbol": "USDJPYm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 159.966,
+    "new_sl": 159.986,
+    "old_tp": 160.374,
+    "new_tp": 160.374,
+    "profit_usd": 6.24,
+    "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T12:15:57.717656+00:00",
+    "ticket": 396702495,
+    "symbol": "GBPUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 1.3241,
+    "new_sl": 1.32298,
+    "old_tp": 1.32,
+    "new_tp": 1.32,
+    "profit_usd": 4.2,
+    "reason": "Trailing 40% pico (tendencia)"
   }
 ]
