@@ -1113,5 +1113,18 @@
     "new_tp": 1.32,
     "profit_usd": 7.4,
     "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T13:15:58.204113+00:00",
+    "ticket": 396724447,
+    "symbol": "EURJPYm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.1,
+    "price": 176.763,
+    "sl": 176.878,
+    "tp": 176.217,
+    "risk_usd": 7.19,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (BEARISH_ENGULFING, Stoch %K=39.76, RSI=45.71, Riesgo ~$7.19 USD)"
   }
 ]
