@@ -1190,5 +1190,29 @@
     "tp": 3830.523,
     "risk_usd": 10.38,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (NONE, Stoch %K=26.28, RSI=40.07, Riesgo ~$10.38 USD)"
+  },
+  {
+    "timestamp": "2026-11-13T19:32:43.248033+00:00",
+    "ticket": 396932684,
+    "symbol": "XAUUSDm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 3890.431,
+    "new_sl": 3878.416,
+    "old_tp": 3830.523,
+    "new_tp": 3830.523,
+    "profit_usd": 4.09,
+    "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T19:38:43.606332+00:00",
+    "ticket": 396925410,
+    "symbol": "EURGBPm",
+    "side": "ADJUST_SL_TP",
+    "old_sl": 0.83538,
+    "new_sl": 0.83469,
+    "old_tp": 0.83332,
+    "new_tp": 0.83332,
+    "profit_usd": 5.15,
+    "reason": "Break-Even+0.10ATR | Trailing 40% pico (tendencia)"
   }
 ]
