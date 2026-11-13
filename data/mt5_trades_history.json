@@ -1043,5 +1043,14 @@
     "new_tp": 0.55225,
     "profit_usd": 11.9,
     "reason": "Trailing 40% pico (tendencia)"
+  },
+  {
+    "timestamp": "2026-11-13T11:15:22.276710+00:00",
+    "ticket": 396533215,
+    "symbol": "NZDUSDm",
+    "side": "CLOSE",
+    "price": 0.55318,
+    "profit_usd": 11.4,
+    "reason": "Cierre SELL por Estocastico=11.92 + BULLISH_HAMMER"
   }
 ]
