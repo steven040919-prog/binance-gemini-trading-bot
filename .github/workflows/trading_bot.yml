@@ -1,9 +1,7 @@
 name: Binance + Gemini AI Autonomous Trading Bot (24/7)
 
 on:
-  schedule:
-    # Ejecuta un ciclo autonomo cada 15 minutos, 24/7
-    - cron: "*/15 * * * *"
+  # Desactivado: el usuario opera unicamente Exness MetaTrader 5
   workflow_dispatch:
     inputs:
       dry_run:

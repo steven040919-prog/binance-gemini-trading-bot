@@ -4,7 +4,6 @@ import argparse
 import json
 import logging
 import os
-import subprocess
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -16,8 +15,7 @@ import MetaTrader5 as mt5
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.bot_engine import AutonomousTradingBot
-from src.config import BASE_DIR, BotConfig, load_dotenv
+from src.config import BASE_DIR, load_dotenv
 from src.gemini_agent import GeminiTradingAgent
 from src.market_scanner import (
     calc_atr_pct,
@@ -66,7 +64,21 @@ MAX_ALLOWED_SPREAD_POINTS = {
     "USTECm": 150,
     "BTCUSDm": 950,
     "ETHUSDm": 180,
-    "XAUUSDm": 45,  # Durante noticias el spread del Oro pasa de 20 a 70+, bloqueando entradas toxicas
+    "XAUUSDm": 450,  # Exness cotiza Oro a 3 decimales (spread normal ~240 pts = $0.24); >450 ($0.45) bloquea latigazos de noticias
+}
+
+# Universo validado en Backtest 1 ano (72.0% WR, PF 1.40) para el Pilar Complementario P5 DoubleRSI H1
+DOUBLE_RSI_SYMBOLS = {
+    "EURUSDm",
+    "GBPUSDm",
+    "USDJPYm",
+    "AUDUSDm",
+    "USDCADm",
+    "USDCHFm",
+    "US500m",
+    "USTECm",
+    "BTCUSDm",
+    "ETHUSDm",
 }
 
 
@@ -149,21 +161,35 @@ class ExnessMT5AutonomousBot:
         self.history_file = history_file
         self.ai_agent = GeminiTradingAgent(api_key=gemini_api_key, model=gemini_model)
         self.peak_prices: dict[int, float] = {}
+        self.peak_timestamps: dict[int, float] = {}
+        self.profit_trail_start_ts: dict[int, float] = {}
         self.last_order_timestamp: float = 0.0
 
         self.report_file.parent.mkdir(parents=True, exist_ok=True)
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
 
     def ensure_connected(self) -> tuple[Any, Any]:
-        # Conectar a MetaTrader 5 (si no esta inicializado, conecta a la instancia oficial de Exness)
+        """Conecta a MetaTrader 5 y verifica conexion real con el servidor del broker (internet activo)."""
         mt5_path = r"C:\Program Files\MetaTrader 5\terminal64.exe"
-        if not mt5.initialize(path=mt5_path):
-            if not mt5.initialize():
-                raise RuntimeError(f"No se pudo inicializar MetaTrader 5: {mt5.last_error()}")
         term = mt5.terminal_info()
         acc = mt5.account_info()
+
+        # Si no hay sesion IPC activa o el terminal perdio conexion con Exness, reiniciar enlace IPC limpio
+        if term is None or acc is None or not getattr(term, "connected", False):
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+            if not mt5.initialize(path=mt5_path):
+                if not mt5.initialize():
+                    raise ConnectionError(f"No se pudo inicializar MetaTrader 5: {mt5.last_error()}")
+            term = mt5.terminal_info()
+            acc = mt5.account_info()
+
         if term is None or acc is None:
-            raise RuntimeError(f"No se pudo leer la cuenta de MetaTrader 5: {mt5.last_error()}")
+            raise ConnectionError(f"No se pudo leer la cuenta de MetaTrader 5: {mt5.last_error()}")
+        if not getattr(term, "connected", False):
+            raise ConnectionError("MetaTrader 5 sin conexion a internet / servidor Exness (term.connected=False)")
         return term, acc
 
     def _fetch_candles(self, symbol: str, timeframe: int, count: int = 250) -> list[dict[str, float]]:
@@ -216,6 +242,7 @@ class ExnessMT5AutonomousBot:
             ema50_s = calc_ema_series(closes_1h, 50)
             ema21_s = calc_ema_series(closes_1h, 21)
             rsi_14 = round(calc_rsi(closes_1h, 14), 2)
+            rsi_3 = round(calc_rsi(closes_1h, 3), 2)
             k_s, d_s = calc_stochastic(c1h, 14, 3, 3)
             macd_l, macd_sig, macd_h = calc_macd(closes_1h)
             bb_u, bb_l, bb_b = calc_bollinger_bands(closes_1h, 20, 2.0)
@@ -295,9 +322,10 @@ class ExnessMT5AutonomousBot:
                 and has_bullish_trigger
             )
 
-            # Pilar 2 LONG: Capitulacion Institucional / Doble Sobreventa Extrema (Ganadora en ETH hoy +22.6%)
+            # Pilar 2 LONG: Capitulacion Institucional / Doble Sobreventa Extrema con filtro macro above_ema200 (Backtest 3A: PF 1.19-1.29)
             p2_long = (
-                stoch_recent_min <= 16.0
+                above_ema200
+                and stoch_recent_min <= 16.0
                 and stoch_k <= 32.0
                 and stoch_turning_up
                 and rsi_14 <= 31.5
@@ -419,17 +447,39 @@ class ExnessMT5AutonomousBot:
 
         return snapshots
 
+    @staticmethod
+    def _is_slow_choppy_market(
+        snap: MT5SymbolSnapshot | None,
+        hours_since_peak: float,
+    ) -> bool:
+        """
+        Detecta si el mercado esta lento o picado con subidas y bajadas sin ruptura limpia:
+        - Sesion lenta / baja liquidez (20:00-07:00 UTC: cierre NY y sesion Asiatica)
+        - Tendencia macro neutral (htf_trend == 'NEUTRAL')
+        - Precio estancado >= 1 hora sin marcar nuevo maximo a favor
+        """
+        utc_hour = datetime.now(timezone.utc).hour
+        is_off_peak_session = utc_hour >= 20 or utc_hour < 7
+        is_neutral_htf = snap is not None and snap.htf_trend == "NEUTRAL"
+        is_stalled_peak = hours_since_peak >= 1.0
+        return is_off_peak_session or is_neutral_htf or is_stalled_peak
+
     def manage_open_positions(self, snapshots_map: dict[str, MT5SymbolSnapshot]) -> list[dict[str, Any]]:
         """
         Revisa posiciones abiertas en MT5 y aplica:
         1. Cierre por agotamiento en extremo opuesto del Estocastico con vela de giro.
-        2. Break-Even + ganancia asegurada al alcanzar >= 1.2 * ATR de beneficio.
-        3. Trailing Stop Dinamico (bloqueando 65%-80% del recorrido) y expansion del Take-Profit en el servidor de Exness.
+        2. Break-Even + 0.35 ATR al alcanzar >= 1.1 * ATR de beneficio.
+        3. Trailing Stop escalonado desde $3.00 USD:
+           - Base: asegura 40% del ultimo pico a favor y se corre conforme sube.
+           - En mercado lento/picado: sube +10% por cada hora tras superar $3.00 (50% -> 60% -> 70% max).
+        4. Expansion del Take-Profit (+2.0 ATR) si el precio se acerca al TP.
         """
         actions: list[dict[str, Any]] = []
         positions = mt5.positions_get()
         if not positions:
             return actions
+
+        now_ts = datetime.now(timezone.utc).timestamp()
 
         for pos in positions:
             ticket = int(pos.ticket)
@@ -439,7 +489,6 @@ class ExnessMT5AutonomousBot:
             cur = float(pos.price_current)
             old_sl = float(pos.sl)
             old_tp = float(pos.tp)
-            vol = float(pos.volume)
             profit_usd = float(pos.profit)
 
             info = mt5.symbol_info(sym)
@@ -448,14 +497,21 @@ class ExnessMT5AutonomousBot:
             snap = snapshots_map.get(sym)
             atr = snap.atr_price if snap and snap.atr_price > 0 else abs(entry * 0.003)
 
-            # Registrar pico a favor
+            # Registrar pico a favor y su timestamp
             if ticket not in self.peak_prices:
                 self.peak_prices[ticket] = cur
-            elif is_buy and cur > self.peak_prices[ticket]:
+                self.peak_timestamps[ticket] = now_ts
+            elif (is_buy and cur > self.peak_prices[ticket]) or ((not is_buy) and cur < self.peak_prices[ticket]):
                 self.peak_prices[ticket] = cur
-            elif (not is_buy) and cur < self.peak_prices[ticket]:
-                self.peak_prices[ticket] = cur
+                self.peak_timestamps[ticket] = now_ts
             peak = self.peak_prices[ticket]
+            hours_since_peak = max(0.0, (now_ts - self.peak_timestamps.get(ticket, now_ts)) / 3600.0)
+
+            # Registrar el momento en que la operacion supera por primera vez $3.00 USD
+            if profit_usd >= 3.00 and ticket not in self.profit_trail_start_ts:
+                # Si ya venia con SL en ganancia tras un reinicio, usar la hora de apertura en MT5 como respaldo
+                sl_already_in_profit = (is_buy and old_sl > entry) or ((not is_buy) and old_sl > 0 and old_sl < entry)
+                self.profit_trail_start_ts[ticket] = float(pos.time) if sl_already_in_profit else now_ts
 
             move_in_favor = (cur - entry) if is_buy else (entry - cur)
             move_atr = move_in_favor / atr if atr > 0 else 0.0
@@ -473,52 +529,55 @@ class ExnessMT5AutonomousBot:
                         actions.append(res)
                     continue
 
-            # 2. Trailing Stop Dinamico y Expansion de Take-Profit (por ATR o por R-Multiple monetario >= $1.80 USD)
-            if (move_atr >= 1.1 or profit_usd >= 1.80) and profit_usd > 0:
+            # 2. Break-Even temprano (0.55 ATR -> +0.10 ATR; 1.1 ATR -> +0.35 ATR), Trailing Escalonado ($3.00+ -> 40%..70%) y Expansion de TP
+            trail_activated = ticket in self.profit_trail_start_ts
+            if (move_atr >= 0.55 or trail_activated) and profit_usd > 0:
                 candidate_sl = old_sl
                 candidate_tp = old_tp
                 reasons: list[str] = []
+                direction = 1.0 if is_buy else -1.0
 
-                if is_buy:
-                    # Break-Even + 0.35 ATR
-                    be_plus = round(entry + (0.35 * atr), digits)
-                    if be_plus > candidate_sl and be_plus < cur - (15 * point):
+                # Break-Even temprano: +0.10 ATR desde 0.55 ATR; sube a +0.35 ATR desde 1.1 ATR
+                if move_atr >= 0.55:
+                    be_atr_lock = 0.35 if move_atr >= 1.1 else 0.10
+                    be_plus = round(entry + direction * (be_atr_lock * atr), digits)
+                    be_is_better = (be_plus > candidate_sl) if is_buy else (candidate_sl <= 0 or be_plus < candidate_sl)
+                    be_valid_dist = (be_plus < cur - (15 * point)) if is_buy else (be_plus > cur + (15 * point))
+                    if be_is_better and be_valid_dist:
                         candidate_sl = be_plus
-                        reasons.append("Break-Even+0.35ATR")
+                        reasons.append(f"Break-Even+{be_atr_lock:.2f}ATR")
 
-                    # Asegurar 68%-80% del recorrido desde entrada hasta el pico cuando >= 1.8 ATR o >= $2.50 USD (+2R)
-                    if move_atr >= 1.8 or profit_usd >= 2.50:
-                        keep = 0.80 if (move_atr >= 3.2 or profit_usd >= 4.50) else 0.68
-                        lock_sl = round(entry + ((peak - entry) * keep), digits)
-                        if lock_sl > candidate_sl and lock_sl < cur - (15 * point):
-                            candidate_sl = lock_sl
-                            reasons.append(f"Trailing {int(keep * 100)}% del pico")
+                # Trailing porcentual desde $3.00 USD (40% base; +10%/hora hasta 70% en mercado lento/picado)
+                if trail_activated:
+                    hours_since_3usd = max(0.0, (now_ts - self.profit_trail_start_ts[ticket]) / 3600.0)
+                    slow_choppy = self._is_slow_choppy_market(snap, hours_since_peak)
+                    if slow_choppy:
+                        hourly_steps = min(3, int(hours_since_3usd))  # 1h->50%, 2h->60%, 3h+->70%
+                        keep = 0.40 + (0.10 * hourly_steps)
+                        mode_tag = "lento/picado"
+                    else:
+                        keep = 0.60 if move_atr >= 3.5 else 0.40
+                        mode_tag = "tendencia"
 
-                    # Si se acerca al TP, expandir TP +2.0 ATR para dejar correr la ganancia
-                    if old_tp > 0 and (old_tp - cur) <= (0.5 * atr):
-                        candidate_tp = round(cur + (2.0 * atr), digits)
+                    peak_move = abs(peak - entry)
+                    lock_sl = round(entry + direction * (peak_move * keep), digits)
+                    lock_is_better = (lock_sl > candidate_sl) if is_buy else (candidate_sl <= 0 or lock_sl < candidate_sl)
+                    lock_valid_dist = (lock_sl < cur - (15 * point)) if is_buy else (lock_sl > cur + (15 * point))
+                    if peak_move > 0 and lock_is_better and lock_valid_dist:
+                        candidate_sl = lock_sl
+                        reasons.append(f"Trailing {int(round(keep * 100))}% pico ({mode_tag})")
+
+                # Si se acerca al TP, expandir TP +2.0 ATR para dejar correr la ganancia
+                if old_tp > 0:
+                    dist_to_tp = (old_tp - cur) if is_buy else (cur - old_tp)
+                    if dist_to_tp <= (0.5 * atr):
+                        candidate_tp = round(cur + direction * (2.0 * atr), digits)
                         reasons.append("Expansion TP +2.0ATR")
 
+                if is_buy:
                     sl_improved = candidate_sl > old_sl + (5 * point)
                     tp_improved = candidate_tp > old_tp + (10 * point)
                 else:
-                    # Posicion SHORT (SELL)
-                    be_minus = round(entry - (0.35 * atr), digits)
-                    if (candidate_sl <= 0 or be_minus < candidate_sl) and be_minus > cur + (15 * point):
-                        candidate_sl = be_minus
-                        reasons.append("Break-Even SHORT+0.35ATR")
-
-                    if move_atr >= 1.8 or profit_usd >= 2.50:
-                        keep = 0.80 if (move_atr >= 3.2 or profit_usd >= 4.50) else 0.68
-                        lock_sl = round(entry - ((entry - peak) * keep), digits)
-                        if (candidate_sl <= 0 or lock_sl < candidate_sl) and lock_sl > cur + (15 * point):
-                            candidate_sl = lock_sl
-                            reasons.append(f"Trailing SHORT {int(keep * 100)}% de caida")
-
-                    if old_tp > 0 and (cur - old_tp) <= (0.5 * atr):
-                        candidate_tp = round(cur - (2.0 * atr), digits)
-                        reasons.append("Expansion TP SHORT -2.0ATR")
-
                     sl_improved = old_sl <= 0 or candidate_sl < old_sl - (5 * point)
                     tp_improved = old_tp > 0 and candidate_tp < old_tp - (10 * point)
 
@@ -635,7 +694,10 @@ class ExnessMT5AutonomousBot:
             risk_usd = abs(float(recalc)) if recalc is not None else abs_loss_min_lot
 
         sl_dist = abs(entry - sl_price)
-        tp_dist = max(sl_dist * 2.4, snap.atr_price * 3.0)
+        if snap.entry_pillar.startswith("P5_DOUBLE_RSI"):
+            tp_dist = snap.atr_price * 0.80
+        else:
+            tp_dist = max(sl_dist * 2.4, snap.atr_price * 3.0)
         tp_price = round(entry + tp_dist if is_buy else entry - tp_dist, snap.digits)
 
         return lot, sl_price, tp_price, round(risk_usd, 2)
@@ -1004,42 +1066,34 @@ def main() -> int:
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         dry_run=args.dry_run,
     )
-    binance_cfg = BotConfig()
-    if args.dry_run:
-        object.__setattr__(binance_cfg, "dry_run", True)
-    binance_bot = AutonomousTradingBot(config=binance_cfg)
 
     cycle = 0
+    reconnect_wait_seconds = 20
     while True:
         cycle += 1
+        mt5_online = False
         try:
             summary = bot.run_cycle(cycle_num=cycle)
             print(json.dumps(summary, indent=2, ensure_ascii=False))
+            mt5_online = True
+        except (ConnectionError, RuntimeError, OSError) as conn_exc:
+            logger.warning(
+                "Sin conexion a internet o MT5 desconectado en ciclo #%d (%s). Reintentando reconexion automatica en %ds...",
+                cycle,
+                conn_exc,
+                reconnect_wait_seconds,
+            )
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
         except Exception as exc:
             logger.exception("Error en ciclo MT5 #%d: %s", cycle, exc)
 
-        # Cada 3 ciclos de 5 min (cada 15 min exactos), ejecuta tambien el Bot de Binance desde la PC
-        # y sincroniza el estado con GitHub para que la Nube quede en Standby (y actue como respaldo si se apaga la PC)
-        if cycle == 1 or cycle % 3 == 1:
-            try:
-                logger.info("Ejecutando ciclo puntual de Binance (Modo Hibrido: PC Primaria + Respaldo Cloud)...")
-                b_summary = binance_bot.run_cycle()
-                logger.info("Ciclo Binance completado: %s", json.dumps(b_summary, ensure_ascii=False))
-                subprocess.run(["git", "pull", "--rebase", "origin", "main"], cwd=str(BASE_DIR), timeout=30, check=False)
-                subprocess.run(["git", "add", "data/"], cwd=str(BASE_DIR), timeout=15, check=False)
-                subprocess.run(
-                    ["git", "commit", "-m", "chore(local-pc): actualizar estado Binance + MT5 [skip ci]"],
-                    cwd=str(BASE_DIR),
-                    timeout=15,
-                    check=False,
-                )
-                subprocess.run(["git", "push", "origin", "main"], cwd=str(BASE_DIR), timeout=30, check=False)
-            except Exception as b_exc:
-                logger.warning("Advertencia en sincronizacion de ciclo Binance local: %s", b_exc)
-
         if not args.loop:
             break
-        time.sleep(max(30, args.interval))
+        sleep_seconds = max(30, args.interval) if mt5_online else reconnect_wait_seconds
+        time.sleep(sleep_seconds)
 
     return 0
 
