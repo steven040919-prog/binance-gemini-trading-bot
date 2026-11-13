@@ -1177,5 +1177,18 @@
     "tp": 0.83332,
     "risk_usd": 7.0,
     "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (NONE, Stoch %K=42.98, RSI=44.1, Riesgo ~$7.00 USD)"
+  },
+  {
+    "timestamp": "2026-11-13T18:42:48.101644+00:00",
+    "ticket": 396932684,
+    "symbol": "XAUUSDm",
+    "side": "SELL",
+    "mode": "LIVE",
+    "lot": 0.01,
+    "price": 3880.053,
+    "sl": 3890.431,
+    "tp": 3830.523,
+    "risk_usd": 10.38,
+    "reason": "Pilar M15_SCALPER_PULLBACK_SHORT (NONE, Stoch %K=26.28, RSI=40.07, Riesgo ~$10.38 USD)"
   }
 ]
