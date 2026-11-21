@@ -120,10 +120,28 @@ class TechnicalSnapshot:
 def calc_ema_series(values: list[float], period: int) -> list[float]:
     if not values:
         return []
+    if period <= 1:
+        return [float(v) for v in values]
+    n = len(values)
     k = 2.0 / (period + 1)
-    ema_vals = [values[0]]
-    for price in values[1:]:
-        ema_vals.append(price * k + ema_vals[-1] * (1.0 - k))
+    omk = 1.0 - k
+    if n < period:
+        ema_vals = [float(values[0])]
+        for price in values[1:]:
+            ema_vals.append(float(price) * k + ema_vals[-1] * omk)
+        return ema_vals
+
+    # Semilla SMA sobre los primeros `period` elementos en el indice `period - 1`
+    ema_vals: list[float] = []
+    running_sum = 0.0
+    for i in range(period):
+        running_sum += float(values[i])
+        ema_vals.append(running_sum / (i + 1))
+
+    prev = ema_vals[-1]
+    for price in values[period:]:
+        prev = float(price) * k + prev * omk
+        ema_vals.append(prev)
     return ema_vals
 
 
@@ -166,6 +184,7 @@ def detect_candle_pattern(
     signal_candle: dict[str, float],
     prev_candle: dict[str, float],
     prev2_candle: dict[str, float] | None = None,
+    min_range: float = 0.0,
 ) -> str:
     """
     Detecta los patrones de velas de confirmacion (optimizados con backtest de 6 meses en 1H):
@@ -184,7 +203,7 @@ def detect_candle_pattern(
     pc = prev_candle["close"]
 
     total_range = h - l
-    if total_range <= 0:
+    if total_range <= 0 or (min_range > 0.0 and total_range < min_range):
         return "NONE"
 
     body = abs(c - o)
@@ -215,12 +234,16 @@ def detect_candle_pattern(
     if lower_wick >= effective_body * 1.5 and (lower_wick / total_range) >= 0.42 and (upper_wick / total_range) <= 0.32:
         return "BULLISH_HAMMER"
 
-    # 4. Estrella de la Manana (Morning Star de 3 velas)
+    # 4. Estrella de la Manana (Morning Star de 3 velas: vela central de cuerpo pequeno)
     if prev2_candle is not None:
         p2o = prev2_candle["open"]
         p2c = prev2_candle["close"]
         p2_body = abs(p2c - p2o)
-        if p2c < p2o and is_bullish and p2_body > 0:
+        prev_high = float(prev_candle.get("high", max(po, pc)))
+        prev_low = float(prev_candle.get("low", min(po, pc)))
+        prev_range = max(0.0, prev_high - prev_low)
+        prev_small_body = prev_body <= max(p2_body * 0.55, prev_range * 0.45)
+        if p2c < p2o and prev_small_body and is_bullish and p2_body > 0:
             if c >= (p2o + p2c) / 2.0 and close_pos >= 0.65 and body >= p2_body * 0.60:
                 return "MORNING_STAR"
 
@@ -282,17 +305,78 @@ def calc_bollinger_bands(closes: list[float], period: int = 20, std_dev: float =
     return round(upper, 6), round(lower, 6), round(pct_b, 3)
 
 
+def calc_atr_wilder(candles: list[dict[str, float]], period: int = 14) -> float:
+    """Calcula ATR mediante Wilder RMA(period) sobre velas cerradas."""
+    n = len(candles)
+    if n == 0 or period <= 0:
+        return 0.0
+    if n == 1:
+        return max(0.0, float(candles[0]["high"]) - float(candles[0]["low"]))
+
+    trs: list[float] = []
+    for i in range(1, n):
+        high = float(candles[i]["high"])
+        low = float(candles[i]["low"])
+        prev_close = float(candles[i - 1]["close"])
+        trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+
+    if len(trs) < period:
+        return sum(trs) / len(trs)
+
+    atr = sum(trs[:period]) / period
+    pm1 = period - 1.0
+    for tr_val in trs[period:]:
+        atr = (atr * pm1 + tr_val) / period
+    return atr
+
+
+def calc_adx(candles: list[dict[str, float]], period: int = 14) -> float:
+    """Calcula ADX de Wilder(period) identico a adx_wilder_array (default 20.0 si faltan velas)."""
+    n = len(candles)
+    if period <= 0 or n < period * 2 + 2:
+        return 20.0
+
+    pdm: list[float] = []
+    mdm: list[float] = []
+    tr: list[float] = []
+    for i in range(1, n):
+        hi = float(candles[i]["high"])
+        lo = float(candles[i]["low"])
+        prev_hi = float(candles[i - 1]["high"])
+        prev_lo = float(candles[i - 1]["low"])
+        prev_c = float(candles[i - 1]["close"])
+        up = hi - prev_hi
+        dn = prev_lo - lo
+        pdm.append(up if (up > dn and up > 0.0) else 0.0)
+        mdm.append(dn if (dn > up and dn > 0.0) else 0.0)
+        tr.append(max(hi - lo, abs(hi - prev_c), abs(lo - prev_c)))
+
+    atr_s = sum(tr[:period])
+    p_s = sum(pdm[:period])
+    m_s = sum(mdm[:period])
+    dx = [0.0] * (n - 1)
+    for i in range(period - 1, n - 1):
+        if i > period - 1:
+            atr_s = atr_s - (atr_s / period) + tr[i]
+            p_s = p_s - (p_s / period) + pdm[i]
+            m_s = m_s - (m_s / period) + mdm[i]
+        if atr_s > 0.0:
+            pdi = 100.0 * p_s / atr_s
+            mdi = 100.0 * m_s / atr_s
+            s = pdi + mdi
+            dx[i] = 100.0 * abs(pdi - mdi) / s if s > 0.0 else 0.0
+
+    adx_val = sum(dx[period - 1 : period * 2 - 1]) / period
+    pm1 = period - 1.0
+    for i in range(period * 2 - 1, n - 1):
+        adx_val = (adx_val * pm1 + dx[i]) / period
+    return round(adx_val, 2)
+
+
 def calc_atr_pct(candles: list[dict[str, float]], period: int = 14) -> float:
     if len(candles) <= period:
         return 1.0
-    trs: list[float] = []
-    for i in range(1, len(candles)):
-        high = candles[i]["high"]
-        low = candles[i]["low"]
-        prev_close = candles[i - 1]["close"]
-        tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-        trs.append(tr)
-    atr = sum(trs[-period:]) / period
+    atr = calc_atr_wilder(candles, period)
     last_close = candles[-1]["close"]
     return round((atr / last_close) * 100.0, 2) if last_close > 0 else 0.0
 

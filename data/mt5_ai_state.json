@@ -1,0 +1,201 @@
+{
+  "updated_at_utc": "2026-11-20T21:46:05.475562+00:00",
+  "last_order_timestamp": 0.0,
+  "position_meta": {},
+  "recent_bot_pos_ids": {
+    "399261044": 1795039650.0,
+    "399284279": 1795058613.0,
+    "399292754": 1795045362.0,
+    "399335663": 1795041086.0,
+    "399337509": 1795038898.0,
+    "399567174": 1795064814.0,
+    "399614173": 1795109572.0,
+    "399623534": 1795100686.0,
+    "399624813": 1795082820.0,
+    "399653551": 1795103021.0,
+    "399656212": 1795116499.0,
+    "400694419": 1795210948.0
+  },
+  "symbol_blocked_until": {
+    "USDCHFm": {
+      "symbol": "USDCHFm",
+      "until_ts": 1795212785.4732645,
+      "until_utc": "2026-11-20 22:13:05 UTC",
+      "duration_minutes": 27.0,
+      "probability_pct": 51,
+      "close_type": "POSITIVE",
+      "profit_usd": 0.54,
+      "reason": "Cierre reciente positivo con patrones de velas bajistas (Bearish Engulfing) y estocástico girando a la baja cerca de zona media. Rollover activo con spreads elevados y distancia superior a 2.5 ATR sobre EMA200 aconsejan esperar corrección profunda antes de reenganchar."
+    }
+  },
+  "evaluated_deal_tickets": [
+    265208706,
+    265219196,
+    265220197,
+    265233543,
+    265235234,
+    265237641,
+    265269549,
+    265373755,
+    265429348,
+    265468832,
+    265519450,
+    265657478,
+    265702458,
+    265796844,
+    265862768,
+    266640655
+  ],
+  "recent_ai_close_decisions": [
+    {
+      "evaluated_at_utc": "2026-11-18 21:13 UTC",
+      "ticket": 265220197,
+      "symbol": "USTECm",
+      "close_type": "NEGATIVE",
+      "profit_usd": -4.5,
+      "probability_pct": 45,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre negativo reciente y mercado lateralizado. Bloqueado por 90 minutos para evitar trampas de volatilidad."
+    },
+    {
+      "evaluated_at_utc": "2026-11-18 21:13 UTC",
+      "ticket": 265219196,
+      "symbol": "USDCADm",
+      "close_type": "NEGATIVE",
+      "profit_usd": -2.9,
+      "probability_pct": 45,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre negativo reciente y pérdida de momentum alcista. Bloqueado por 90 minutos para reevaluar estructura."
+    },
+    {
+      "evaluated_at_utc": "2026-11-18 21:55 UTC",
+      "ticket": 265233543,
+      "symbol": "USDJPYm",
+      "close_type": "NEGATIVE",
+      "profit_usd": -2.67,
+      "probability_pct": 31,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre negativo reciente con volatilidad y patron de giro bajista en rango neutral, se bloquea por 90 minutos."
+    },
+    {
+      "evaluated_at_utc": "2026-11-18 22:10 UTC",
+      "ticket": 265235234,
+      "symbol": "AUDUSDm",
+      "close_type": "POSITIVE",
+      "profit_usd": 0.72,
+      "probability_pct": 45,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre positivo reciente hace menos de 90 minutos combinado con condiciones de baja liquidez y spreads elevados, aconseja bloquear el activo temporalmente."
+    },
+    {
+      "evaluated_at_utc": "2026-11-18 22:32 UTC",
+      "ticket": 265237641,
+      "symbol": "USDCHFm",
+      "close_type": "NEGATIVE",
+      "profit_usd": -3.68,
+      "probability_pct": 38,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre negativo reciente y formación de estrella fugaz con estocástico girando a la baja aconsejan esperar antes de reintentar."
+    },
+    {
+      "evaluated_at_utc": "2026-11-18 23:44 UTC",
+      "ticket": 265269549,
+      "symbol": "ETHUSDm",
+      "close_type": "NEGATIVE",
+      "profit_usd": -2.76,
+      "probability_pct": 38,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre negativo hace menos de 2 minutos con la aparición de una vela envolvente alcista y estocástico al alza. Riesgo elevado de rebote o mercado picado en baja liquidez, por lo que se prefiere mantener bloqueado el activo."
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 02:08 UTC",
+      "ticket": 265373755,
+      "symbol": "GBPUSDm",
+      "close_type": "POSITIVE",
+      "profit_usd": 0.99,
+      "probability_pct": 33,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre positivo reciente y sobre-extensión severa en 1H (-10.78x ATR) con riesgo de reversión a la media; se bloquea temporalmente la reactivación."
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 03:26 UTC",
+      "ticket": 265429348,
+      "symbol": "GBPUSDm",
+      "close_type": "POSITIVE",
+      "profit_usd": 3.86,
+      "probability_pct": 30,
+      "status": "BLOQUEADO 90m",
+      "reason": "El activo presenta una sobre-extensión técnica severa (-11.0x ATR) respecto a la EMA 200 en 1H, sumado a un patrón de velas de martillo alcista y lectura de sobreventa (RSI 31, Stoch 11.2), lo que incrementa el riesgo de un rebote correctivo a pesar del sesgo bajista general."
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 05:09 UTC",
+      "ticket": 265468832,
+      "symbol": "USTECm",
+      "close_type": "POSITIVE",
+      "profit_usd": 0.38,
+      "probability_pct": 45,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre reciente hace 3 minutos con ganancia minima ($0.38) en sesion Asia-Pacifico de baja liquidez para indices US; tendencia 4H NEUTRAL, precio sobre EMA21/EMA50 1H con estocastico sobrecomprado girando al alza (84.28) y sin setup activo (WATCH)."
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 10:08 UTC",
+      "ticket": 265519450,
+      "symbol": "USTECm",
+      "close_type": "NEGATIVE",
+      "profit_usd": -4.54,
+      "probability_pct": 45,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre NEGATIVO reciente hace apenas un minuto con patrón de velas alcista (BULLISH_ENGULFING) y tendencia de 4H neutral, lo que sugiere evitar la reentrada inmediata."
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 15:05 UTC",
+      "ticket": 265657478,
+      "symbol": "US500m",
+      "close_type": "POSITIVE",
+      "profit_usd": 0.57,
+      "probability_pct": 49,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre positivo reciente y alta volatilidad en índices. Se requiere esperar el periodo de enfriamiento de 90 minutos para evitar trampas de mercado."
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 15:44 UTC",
+      "ticket": 265702458,
+      "symbol": "EURUSDm",
+      "close_type": "POSITIVE",
+      "profit_usd": 0.42,
+      "probability_pct": 64,
+      "status": "HABILITADO (>=60%)",
+      "reason": "4H BEARISH a favor; estructura 1H alineada; tendencia 1H sobre-extendida (-5.7x ATR); MACD a favor; espacio bajista en Estocastico; cierre POSITIVO reciente (1m); bloque USD alineado"
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 17:35 UTC",
+      "ticket": 265796844,
+      "symbol": "ETHUSDm",
+      "close_type": "POSITIVE",
+      "profit_usd": 1.98,
+      "probability_pct": 75,
+      "status": "HABILITADO (>=60%)",
+      "reason": "4H BEARISH a favor; estructura 1H alineada; MACD a favor; cierre POSITIVO reciente (2m); BTC+ETH alineados"
+    },
+    {
+      "evaluated_at_utc": "2026-11-19 19:31 UTC",
+      "ticket": 265862768,
+      "symbol": "NZDUSDm",
+      "close_type": "POSITIVE",
+      "profit_usd": 2.76,
+      "probability_pct": 52,
+      "status": "BLOQUEADO 90m",
+      "reason": "Cierre positivo reciente hace menos de 90 minutos. Aunque la estructura es bajista, el estocástico en zona de sobreventa (9.9) sugiere un posible rebote técnico a corto plazo. Se recomienda esperar a que el estocástico gire al alza o el precio se acerque a la EMA200."
+    },
+    {
+      "evaluated_at_utc": "2026-11-20 21:46 UTC",
+      "ticket": 266640655,
+      "symbol": "USDCHFm",
+      "close_type": "POSITIVE",
+      "profit_usd": 0.54,
+      "probability_pct": 51,
+      "status": "BLOQUEADO 30m",
+      "reason": "Cierre reciente positivo con patrones de velas bajistas (Bearish Engulfing) y estocástico girando a la baja cerca de zona media. Rollover activo con spreads elevados y distancia superior a 2.5 ATR sobre EMA200 aconsejan esperar corrección profunda antes de reenganchar."
+    }
+  ]
+}

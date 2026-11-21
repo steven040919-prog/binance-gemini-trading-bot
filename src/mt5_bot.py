@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,15 @@ import MetaTrader5 as mt5
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import BASE_DIR, load_dotenv
-from src.gemini_agent import GeminiTradingAgent
+from src.gemini_agent import (
+    GeminiTradingAgent,
+    MT5AICycleEvaluation,
+    MT5PositionAIReview,
+)
 from src.market_scanner import (
+    calc_adx,
     calc_atr_pct,
+    calc_atr_wilder,
     calc_bollinger_bands,
     calc_ema_series,
     calc_macd,
@@ -31,7 +38,7 @@ logger = logging.getLogger("mt5_bot")
 
 MT5_MAGIC_NUMBER = 20261109
 
-# Universo de activos de alta liquidez en Exness Standard (sufijo 'm') compatibles con cuenta desde $10 USD
+# Universo de activos de alta liquidez en Exness Standard (sufijo 'm') para contexto macro 360°
 DEFAULT_MT5_SYMBOLS = [
     "EURUSDm",
     "GBPUSDm",
@@ -46,10 +53,33 @@ DEFAULT_MT5_SYMBOLS = [
     "USTECm",
     "BTCUSDm",
     "ETHUSDm",
-    "XAUUSDm",  # Se activa automaticamente cuando el margen libre supera ~$22 USD o apalancamiento >= 1:500
+    "XAUUSDm",  # Se activa automaticamente cuando el margen libre y el veto de compresion SL lo permiten
 ]
 
-# Escudo 2: Limite maximo de spread permitido para entrar (evita entrar durante latigazos de noticias de alto impacto)
+CRYPTO_SYMBOLS = {"BTCUSDm", "ETHUSDm"}
+FOREX_SYMBOLS = {
+    "EURUSDm",
+    "GBPUSDm",
+    "USDJPYm",
+    "AUDUSDm",
+    "NZDUSDm",
+    "USDCADm",
+    "USDCHFm",
+    "EURGBPm",
+    "EURJPYm",
+}
+
+# Universo B_FINAL_HYBRID_ADX_0.65PCT validado IS + OOS
+H1_EXCLUDED_SYMBOLS = {"ETHUSDm"}
+M15_SCALPER_ALLOWED_SYMBOLS = {"US500m", "USTECm", "BTCUSDm", "XAUUSDm"}
+M15_SCALPER_EXCLUDED_SYMBOLS = set(DEFAULT_MT5_SYMBOLS) - M15_SCALPER_ALLOWED_SYMBOLS
+TWIN_CORRELATION_CLUSTERS = (
+    {"US500m", "USTECm"},
+    {"BTCUSDm", "ETHUSDm"},
+    {"AUDUSDm", "NZDUSDm"},
+)
+
+# Escudo 2: Limite maximo de spread permitido para entrar (calibrado IS+OOS)
 MAX_ALLOWED_SPREAD_POINTS = {
     "EURUSDm": 16,
     "GBPUSDm": 18,
@@ -60,25 +90,11 @@ MAX_ALLOWED_SPREAD_POINTS = {
     "USDCHFm": 20,
     "EURGBPm": 22,
     "EURJPYm": 25,
-    "US500m": 65,
-    "USTECm": 150,
-    "BTCUSDm": 950,
+    "US500m": 90,
+    "USTECm": 260,
+    "BTCUSDm": 1800,
     "ETHUSDm": 180,
     "XAUUSDm": 450,  # Exness cotiza Oro a 3 decimales (spread normal ~240 pts = $0.24); >450 ($0.45) bloquea latigazos de noticias
-}
-
-# Universo validado en Backtest 1 ano (72.0% WR, PF 1.40) para el Pilar Complementario P5 DoubleRSI H1
-DOUBLE_RSI_SYMBOLS = {
-    "EURUSDm",
-    "GBPUSDm",
-    "USDJPYm",
-    "AUDUSDm",
-    "USDCADm",
-    "USDCHFm",
-    "US500m",
-    "USTECm",
-    "BTCUSDm",
-    "ETHUSDm",
 }
 
 
@@ -118,10 +134,15 @@ class MT5SymbolSnapshot:
     prev_candle_low: float
     prev_candle_high: float
     entry_pillar: str
-    strategy_setup: str  # LONG_ENTRY | SHORT_ENTRY | EXIT_LONG | EXIT_SHORT | WATCH
+    strategy_setup: str  # LONG_ENTRY | SHORT_ENTRY | WATCH
     structural_long_sl: float
     structural_short_sl: float
     htf_trend: str
+    adx_14: float = 20.0
+    atr_15_price: float = 0.0
+    recent_h1_closes: list[float] = field(default_factory=list)
+    swing_high_20: float = 0.0
+    swing_low_20: float = 0.0
 
 
 class ExnessMT5AutonomousBot:
@@ -148,6 +169,7 @@ class ExnessMT5AutonomousBot:
         dry_run: bool = False,
         report_file: Path = Path("data/mt5_latest_report.md"),
         history_file: Path = Path("data/mt5_trades_history.json"),
+        ai_state_file: Path = Path("data/mt5_ai_state.json"),
     ) -> None:
         self.gemini_api_key = gemini_api_key
         self.gemini_model = gemini_model
@@ -159,14 +181,35 @@ class ExnessMT5AutonomousBot:
         self.dry_run = dry_run
         self.report_file = report_file
         self.history_file = history_file
+        self.ai_state_file = ai_state_file
         self.ai_agent = GeminiTradingAgent(api_key=gemini_api_key, model=gemini_model)
         self.peak_prices: dict[int, float] = {}
         self.peak_timestamps: dict[int, float] = {}
         self.profit_trail_start_ts: dict[int, float] = {}
+        self.position_meta: dict[int, dict[str, Any]] = {}
+        self.recent_bot_pos_ids: dict[int, float] = {}
+        self.known_bot_pos_ids: set[int] = set()
         self.last_order_timestamp: float = 0.0
+        self.symbol_blocked_until: dict[str, dict[str, Any]] = {}
+        self.evaluated_deal_tickets: set[int] = set()
+        self.recent_ai_close_decisions: list[dict[str, Any]] = []
+        self.last_ai_eval: MT5AICycleEvaluation | None = None
+        self.last_ai_eval_ts: float = 0.0
+        self._last_ai_macro_sig: tuple[Any, ...] | None = None
+        self._last_ai_atr_milestones: dict[int, int] = {}
+        self._last_ai_sl_danger: dict[int, bool] = {}
 
         self.report_file.parent.mkdir(parents=True, exist_ok=True)
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
+        self.ai_state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._load_ai_state()
+
+    @staticmethod
+    def _atomic_write_text(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+        tmp_path.write_text(content, encoding="utf-8")
+        os.replace(tmp_path, path)
 
     def ensure_connected(self) -> tuple[Any, Any]:
         """Conecta a MetaTrader 5 y verifica conexion real con el servidor del broker (internet activo)."""
@@ -192,9 +235,9 @@ class ExnessMT5AutonomousBot:
             raise ConnectionError("MetaTrader 5 sin conexion a internet / servidor Exness (term.connected=False)")
         return term, acc
 
-    def _fetch_candles(self, symbol: str, timeframe: int, count: int = 250) -> list[dict[str, float]]:
+    def _fetch_candles(self, symbol: str, timeframe: int, count: int = 600) -> list[dict[str, float]]:
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
-        if rates is None or len(rates) < 60:
+        if rates is None or len(rates) < 55:
             return []
         candles: list[dict[str, float]] = []
         for r in rates:
@@ -231,34 +274,30 @@ class ExnessMT5AutonomousBot:
             p1pct = mt5.order_calc_profit(mt5.ORDER_TYPE_BUY, sym, info.volume_min, tick.ask, tick.ask * 1.01)
             usd_per_1pct = abs(float(p1pct)) if p1pct is not None else 1.0
 
-            c1h = self._fetch_candles(sym, mt5.TIMEFRAME_H1, 250)
-            c4h = self._fetch_candles(sym, mt5.TIMEFRAME_H4, 120)
+            c1h = self._fetch_candles(sym, mt5.TIMEFRAME_H1, 600)
+            c4h = self._fetch_candles(sym, mt5.TIMEFRAME_H4, 200)
             if len(c1h) < 205 or len(c4h) < 55:
                 continue
 
-            # Usamos las velas cerradas hasta c1h[-2] y la vela activa/recien cerrada para indicadores limpios
-            closes_1h = [c["close"] for c in c1h]
+            # Indicadores 1H y 4H estrictamente sobre velas cerradas ([:-1]) para evitar parpadeo intra-vela (BUG-11)
+            c1h_closed = c1h[:-1]
+            c4h_closed = c4h[:-1]
+            closes_1h = [c["close"] for c in c1h_closed]
             ema200_s = calc_ema_series(closes_1h, 200)
             ema50_s = calc_ema_series(closes_1h, 50)
             ema21_s = calc_ema_series(closes_1h, 21)
             rsi_14 = round(calc_rsi(closes_1h, 14), 2)
-            rsi_3 = round(calc_rsi(closes_1h, 3), 2)
-            k_s, d_s = calc_stochastic(c1h, 14, 3, 3)
+            k_s, d_s = calc_stochastic(c1h_closed, 14, 3, 3)
             macd_l, macd_sig, macd_h = calc_macd(closes_1h)
             bb_u, bb_l, bb_b = calc_bollinger_bands(closes_1h, 20, 2.0)
-            atr_pct = calc_atr_pct(c1h, 14)
 
             cur_price = float(tick.bid)
-            trs = [
-                max(
-                    c1h[k]["high"] - c1h[k]["low"],
-                    abs(c1h[k]["high"] - c1h[k - 1]["close"]),
-                    abs(c1h[k]["low"] - c1h[k - 1]["close"]),
-                )
-                for k in range(len(c1h) - 14, len(c1h))
-            ]
-            raw_atr_val = sum(trs) / len(trs) if trs else (cur_price * 0.002)
+            raw_atr_val = calc_atr_wilder(c1h_closed, 14)
+            if raw_atr_val <= 0.0:
+                raw_atr_val = cur_price * 0.002
             atr_price = max(raw_atr_val, info.point * 25.0)
+            atr_pct = round((atr_price / cur_price) * 100.0, 2) if cur_price > 0 else 0.0
+            adx_14 = calc_adx(c1h_closed, 14)
 
             ema_200 = round(ema200_s[-1], info.digits)
             ema_50 = round(ema50_s[-1], info.digits)
@@ -277,44 +316,62 @@ class ExnessMT5AutonomousBot:
             stoch_turning_up = stoch_k > stoch_prev_k or stoch_k >= stoch_d
             stoch_turning_down = stoch_k < stoch_prev_k or stoch_k <= stoch_d
 
-            # Evaluamos patron tanto en la ultima vela cerrada (c1h[-2] vs c1h[-3]) como en la actual (c1h[-1] vs c1h[-2])
-            pat_closed = detect_candle_pattern(c1h[-2], c1h[-3], c1h[-4])
-            pat_live = detect_candle_pattern(c1h[-1], c1h[-2], c1h[-3])
-            candle_pattern = pat_live if pat_live != "NONE" else pat_closed
+            # Patron de vela exclusivamente sobre velas cerradas con rango minimo >= 0.35 * ATR
+            min_pat_range = 0.35 * atr_price
+            pat_last = detect_candle_pattern(c1h_closed[-1], c1h_closed[-2], c1h_closed[-3], min_range=min_pat_range)
+            pat_prev = (
+                detect_candle_pattern(c1h_closed[-2], c1h_closed[-3], c1h_closed[-4], min_range=min_pat_range)
+                if len(c1h_closed) >= 4
+                else "NONE"
+            )
+            candle_pattern = pat_last if pat_last != "NONE" else pat_prev
 
-            prev_low = min(c1h[-2]["low"], c1h[-1]["low"])
-            prev_high = max(c1h[-2]["high"], c1h[-1]["high"])
+            prev_low = min(c1h_closed[-2]["low"], c1h_closed[-1]["low"])
+            prev_high = max(c1h_closed[-2]["high"], c1h_closed[-1]["high"])
+            recent_h1_closes = [round(c["close"], info.digits) for c in c1h_closed[-5:]]
+            swing_window = c1h_closed[-20:]
+            swing_high_20 = round(max(c["high"] for c in swing_window), info.digits)
+            swing_low_20 = round(min(c["low"] for c in swing_window), info.digits)
 
-            # Calculo de histograma MACD previo para confirmar giro de momentum
+            # Calculo de histograma MACD previo sobre velas cerradas
             _, _, prev_macd_h = calc_macd(closes_1h[:-1])
             macd_improving = macd_h > prev_macd_h
             macd_weakening = macd_h < prev_macd_h
 
-            # Stop-Loss estructural calibrado por ATR (3.0x ATR en MT5 validado en Backtest 6M de Exness)
+            # Stop-Loss estructural calibrado por ATR (3.0x ATR en H1)
             sl_dist_3atr = 3.0 * atr_price
             structural_long_sl = round(cur_price - sl_dist_3atr, info.digits)
             structural_short_sl = round(float(tick.ask) + sl_dist_3atr, info.digits)
 
-            # Tendencia 4H
-            closes_4h = [c["close"] for c in c4h]
+            # Tendencia 4H sobre velas cerradas
+            closes_4h = [c["close"] for c in c4h_closed]
             htf_e21 = calc_ema_series(closes_4h, 21)[-1]
             htf_e50 = calc_ema_series(closes_4h, 50)[-1]
-            htf_trend = "BULLISH" if closes_4h[-1] > htf_e21 >= htf_e50 else ("BEARISH" if closes_4h[-1] < htf_e21 <= htf_e50 else "NEUTRAL")
+            htf_trend = (
+                "BULLISH"
+                if closes_4h[-1] > htf_e21 >= htf_e50
+                else ("BEARISH" if closes_4h[-1] < htf_e21 <= htf_e50 else "NEUTRAL")
+            )
 
+            # Triggers H1 sin veto de vela contraria (decision NO-GO validada en IS/OOS)
             has_bullish_trigger = candle_pattern in ("BULLISH_HAMMER", "BULLISH_ENGULFING", "MORNING_STAR") or (
-                c1h[-1]["close"] > c1h[-1]["open"] and c1h[-1]["close"] > c1h[-2]["high"]
+                c1h_closed[-1]["close"] > c1h_closed[-1]["open"] and c1h_closed[-1]["close"] > c1h_closed[-2]["high"]
             )
             has_bearish_trigger = candle_pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING") or (
-                c1h[-1]["close"] < c1h[-1]["open"] and c1h[-1]["close"] < c1h[-2]["low"]
+                c1h_closed[-1]["close"] < c1h_closed[-1]["open"] and c1h_closed[-1]["close"] < c1h_closed[-2]["low"]
             )
 
-            # === PILARES CUANTITATIVOS CALIBRADOS CON ATR PARA MT5 (FOREX / INDICES / CRIPTO) ===
-            # Pilar 1 LONG: Pullback a EMA 200 o EMA 50 en tendencia alcista + Estocastico <= 22 girando al alza
+            # === PILARES CUANTITATIVOS H1 (B_FINAL_HYBRID_ADX_0.65PCT) ===
+            h1_allowed = (sym not in H1_EXCLUDED_SYMBOLS) and (20.0 <= adx_14 < 35.0)
+
+            # Pilar 1 LONG: Pullback a EMA 200 (sin bypass via EMA 50, abs(dist_atr) <= 4.8 y 20 <= ADX < 35)
             p1_long = (
-                above_ema200
+                h1_allowed
+                and above_ema200
                 and ema_50 >= ema_200 * 0.998
                 and ema200_slope_pos
-                and (-0.5 <= dist_atr <= 3.0 or abs(cur_price - ema_50) <= 1.5 * atr_price)
+                and abs(dist_atr) <= 4.8
+                and (-0.5 <= dist_atr <= 3.0)
                 and (stoch_recent_min <= 22.0 and stoch_k <= 42.0 and stoch_turning_up)
                 and rsi_14 <= 44.0
                 and bb_b <= 0.22
@@ -322,24 +379,17 @@ class ExnessMT5AutonomousBot:
                 and has_bullish_trigger
             )
 
-            # Pilar 2 LONG: Capitulacion Institucional / Doble Sobreventa Extrema con filtro macro above_ema200 (Backtest 3A: PF 1.19-1.29)
-            p2_long = (
-                above_ema200
-                and stoch_recent_min <= 16.0
-                and stoch_k <= 32.0
-                and stoch_turning_up
-                and rsi_14 <= 31.5
-                and bb_b <= 0.06
-                and macd_improving
-                and has_bullish_trigger
-            )
+            # Pilar 2 LONG desactivado permanentemente (validado muerto en auditoria)
+            p2_long = False
 
-            # Pilar S1 SHORT: Rechazo Bajista en EMA 200 o EMA 50 en tendencia bajista + Estocastico >= 78 girando a la baja (73.7% WR en Exness 6M)
+            # Pilar S1 SHORT: Rechazo Bajista en EMA 200 (sin bypass via EMA 50, abs(dist_atr) <= 4.8 y 20 <= ADX < 35)
             s1_short = (
-                (not above_ema200)
+                h1_allowed
+                and (not above_ema200)
                 and ema_50 <= ema_200 * 1.002
                 and (not ema200_slope_pos)
-                and (-3.0 <= dist_atr <= 0.5 or abs(cur_price - ema_50) <= 1.5 * atr_price)
+                and abs(dist_atr) <= 4.8
+                and (-3.0 <= dist_atr <= 0.5)
                 and (stoch_recent_max >= 78.0 and stoch_k >= 58.0 and stoch_turning_down)
                 and rsi_14 >= 56.0
                 and bb_b >= 0.78
@@ -347,35 +397,77 @@ class ExnessMT5AutonomousBot:
                 and has_bearish_trigger
             )
 
-            # === ESTRATEGIA ALTA FRECUENCIA 15 MINUTOS (SCALPER M15 MOMENTUM PULLBACK - 507 TRADES 6M) ===
-            c15m = self._fetch_candles(sym, mt5.TIMEFRAME_M15, 60)
+            # === ESTRATEGIA ALTA FRECUENCIA M15 EXCLUSIVA CORE4 (H1_LOOSE + SL 2.0*ATR_15) ===
             m15_long = False
             m15_short = False
             m15_sl = 0.0
-            if len(c15m) >= 45:
-                closes_15 = [c["close"] for c in c15m]
+            atr_15_price = 0.0
+            c15m = (
+                self._fetch_candles(sym, mt5.TIMEFRAME_M15, 250)
+                if (sym in M15_SCALPER_ALLOWED_SYMBOLS or sym in open_symbols)
+                else []
+            )
+            if len(c15m) >= 20:
+                c15m_closed = c15m[:-1]
+                raw_atr_15 = calc_atr_wilder(c15m_closed, 14)
+                atr_15_price = max(raw_atr_15 if raw_atr_15 > 0.0 else (cur_price * 0.001), info.point * 10.0)
+
+            if sym in M15_SCALPER_ALLOWED_SYMBOLS and len(c15m) >= 60:
+                c15m_closed = c15m[:-1]
+                closes_15 = [c["close"] for c in c15m_closed]
                 e9_15 = calc_ema_series(closes_15, 9)[-1]
                 e21_15 = calc_ema_series(closes_15, 21)[-1]
                 e50_15 = calc_ema_series(closes_15, 50)[-1]
-                raw_k15, _ = calc_stochastic(c15m, 14, 3, 3)
+                raw_k15, _ = calc_stochastic(c15m_closed, 14, 3, 3)
                 k15 = raw_k15[-1] if raw_k15 else 50.0
                 k15_prev = raw_k15[-2] if len(raw_k15) >= 2 else k15
                 rsi_15 = calc_rsi(closes_15, 14)
-                trs_15 = [max(c15m[k]["high"] - c15m[k]["low"], abs(c15m[k]["high"] - c15m[k - 1]["close"]), abs(c15m[k]["low"] - c15m[k - 1]["close"])) for k in range(len(c15m) - 14, len(c15m))]
-                atr_15 = sum(trs_15) / len(trs_15) if trs_15 else (cur_price * 0.001)
+                last_c15 = c15m_closed[-1]
 
-                # Scalper M15 LONG: Tendencia Macro H1 alcista + EMA 9 > 21 > 50 en M15 + Pullback con Estocastico 25-50 girando al alza
-                m15_bull_align = above_ema200 and (e9_15 > e21_15 > e50_15) and cur_price >= e21_15 * 0.9995 and c15m[-1]["low"] <= e9_15 * 1.0003
-                m15_long = m15_bull_align and (25.0 <= k15 <= 52.0) and (k15 > k15_prev) and (48.0 <= rsi_15 <= 64.0) and (c15m[-1]["close"] > c15m[-1]["open"] or candle_pattern in ("BULLISH_HAMMER", "BULLISH_ENGULFING"))
+                # Solo para Criptos: evitar entrar tras vela M15 ya desplomada/disparada (> 0.75 * ATR_15)
+                is_crypto = sym in CRYPTO_SYMBOLS
+                crypto_m15_ok = (not is_crypto) or (abs(last_c15["close"] - last_c15["open"]) <= 0.75 * atr_15_price)
 
-                # Scalper M15 SHORT: Tendencia Macro H1 bajista + EMA 9 < 21 < 50 en M15 + Pullback con Estocastico 50-75 girando a la baja
-                m15_bear_align = (not above_ema200) and (e9_15 < e21_15 < e50_15) and cur_price <= e21_15 * 1.0005 and c15m[-1]["high"] >= e9_15 * 0.9997
-                m15_short = m15_bear_align and (48.0 <= k15 <= 75.0) and (k15 < k15_prev) and (36.0 <= rsi_15 <= 52.0) and (c15m[-1]["close"] < c15m[-1]["open"] or candle_pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING"))
+                # Scalper M15 LONG (CORE4 + H1_LOOSE: stoch_k < 80 y rsi_14 < 68)
+                m15_bull_align = (
+                    crypto_m15_ok
+                    and above_ema200
+                    and (e9_15 > e21_15 > e50_15)
+                    and cur_price >= e21_15 * 0.9995
+                    and last_c15["low"] <= e9_15 * 1.0003
+                )
+                m15_long = (
+                    m15_bull_align
+                    and self._is_m15_scalper_context_allowed(sym, True, dist_atr, htf_trend)
+                    and (stoch_k < 80.0 and rsi_14 < 68.0)
+                    and (25.0 <= k15 <= 52.0)
+                    and (k15 > k15_prev)
+                    and (48.0 <= rsi_15 <= 64.0)
+                    and (last_c15["close"] > last_c15["open"] or candle_pattern in ("BULLISH_HAMMER", "BULLISH_ENGULFING"))
+                )
+
+                # Scalper M15 SHORT (CORE4 + H1_LOOSE: stoch_k > 20 y rsi_14 > 32)
+                m15_bear_align = (
+                    crypto_m15_ok
+                    and (not above_ema200)
+                    and (e9_15 < e21_15 < e50_15)
+                    and cur_price <= e21_15 * 1.0005
+                    and last_c15["high"] >= e9_15 * 0.9997
+                )
+                m15_short = (
+                    m15_bear_align
+                    and self._is_m15_scalper_context_allowed(sym, False, dist_atr, htf_trend)
+                    and (stoch_k > 20.0 and rsi_14 > 32.0)
+                    and (48.0 <= k15 <= 75.0)
+                    and (k15 < k15_prev)
+                    and (36.0 <= rsi_15 <= 52.0)
+                    and (last_c15["close"] < last_c15["open"] or candle_pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING"))
+                )
 
                 if m15_long:
-                    m15_sl = round(cur_price - (1.35 * atr_15), info.digits)
+                    m15_sl = round(cur_price - (2.0 * atr_15_price), info.digits)
                 elif m15_short:
-                    m15_sl = round(float(tick.ask) + (1.35 * atr_15), info.digits)
+                    m15_sl = round(float(tick.ask) + (2.0 * atr_15_price), info.digits)
 
             entry_pillar = "NONE"
             if p1_long:
@@ -395,10 +487,6 @@ class ExnessMT5AutonomousBot:
                 entry_pillar = "M15_SCALPER_PULLBACK_SHORT"
                 setup = "SHORT_ENTRY"
                 structural_short_sl = m15_sl
-            elif stoch_k >= 80.0 and has_bearish_trigger:
-                setup = "EXIT_LONG"
-            elif stoch_k <= 20.0 and has_bullish_trigger:
-                setup = "EXIT_SHORT"
             else:
                 setup = "WATCH"
 
@@ -442,44 +530,130 @@ class ExnessMT5AutonomousBot:
                     structural_long_sl=structural_long_sl,
                     structural_short_sl=structural_short_sl,
                     htf_trend=htf_trend,
+                    adx_14=adx_14,
+                    atr_15_price=round(atr_15_price, info.digits),
+                    recent_h1_closes=recent_h1_closes,
+                    swing_high_20=swing_high_20,
+                    swing_low_20=swing_low_20,
                 )
             )
 
         return snapshots
 
     @staticmethod
-    def _is_slow_choppy_market(
-        snap: MT5SymbolSnapshot | None,
-        hours_since_peak: float,
+    def _is_m15_scalper_context_allowed(
+        symbol: str,
+        is_long: bool,
+        dist_atr: float,
+        htf_trend: str,
     ) -> bool:
-        """
-        Detecta si el mercado esta lento o picado con subidas y bajadas sin ruptura limpia:
-        - Sesion lenta / baja liquidez (20:00-07:00 UTC: cierre NY y sesion Asiatica)
-        - Tendencia macro neutral (htf_trend == 'NEUTRAL')
-        - Precio estancado >= 1 hora sin marcar nuevo maximo a favor
-        """
-        utc_hour = datetime.now(timezone.utc).hour
-        is_off_peak_session = utc_hour >= 20 or utc_hour < 7
-        is_neutral_htf = snap is not None and snap.htf_trend == "NEUTRAL"
-        is_stalled_peak = hours_since_peak >= 1.0
-        return is_off_peak_session or is_neutral_htf or is_stalled_peak
+        """Restringe M15_SCALPER a CORE4 y filtra sobre-extension respecto a EMA 200 1H y tendencia 4H."""
+        if symbol not in M15_SCALPER_ALLOWED_SYMBOLS:
+            return False
+        if is_long:
+            return (-0.5 <= dist_atr <= 4.8) and (htf_trend != "BEARISH")
+        return (-4.8 <= dist_atr <= 0.5) and (htf_trend != "BULLISH")
 
-    def manage_open_positions(self, snapshots_map: dict[str, MT5SymbolSnapshot]) -> list[dict[str, Any]]:
+    @staticmethod
+    def _is_pre_rollover_entry_blackout(now_utc: datetime) -> bool:
+        mins = now_utc.hour * 60 + now_utc.minute
+        return (20 * 60 + 30) <= mins <= (23 * 60 + 15)
+
+    def _prune_position_meta(self, active_tickets: set[int]) -> bool:
+        dirty = False
+        now_ts = time.time()
+        for t in list(self.position_meta.keys()):
+            if t not in active_tickets:
+                meta = self.position_meta.pop(t, None)
+                if isinstance(meta, dict) and meta.get("is_bot", True):
+                    self.recent_bot_pos_ids[t] = now_ts
+                dirty = True
+        for d in (
+            self.peak_prices,
+            self.peak_timestamps,
+            self.profit_trail_start_ts,
+            self._last_ai_atr_milestones,
+            self._last_ai_sl_danger,
+        ):
+            for t in list(d.keys()):
+                if t not in active_tickets:
+                    d.pop(t, None)
+        return dirty
+
+    def _ensure_position_meta(
+        self,
+        pos: Any,
+        snap: MT5SymbolSnapshot | None,
+        now_ts: float,
+        point: float,
+    ) -> tuple[dict[str, Any], bool]:
+        ticket = int(pos.ticket)
+        existing = self.position_meta.get(ticket)
+        if existing is not None:
+            return existing, False
+
+        is_buy = pos.type == mt5.POSITION_TYPE_BUY
+        entry = float(pos.price_open)
+        cur = float(pos.price_current)
+        old_sl = float(pos.sl)
+        comment = str(getattr(pos, "comment", "") or "")
+        pos_magic = int(getattr(pos, "magic", -1))
+        is_bot = (pos_magic == MT5_MAGIC_NUMBER) or comment.startswith("GeminiBot")
+        is_m15 = comment.startswith("GeminiBot_M15")
+
+        atr_1h = snap.atr_price if (snap and snap.atr_price > 0) else abs(entry * 0.003)
+        atr_15 = snap.atr_15_price if (snap and snap.atr_15_price > 0) else (atr_1h * 0.5)
+        sl_on_loss_side = (is_buy and old_sl > 0 and old_sl < entry) or ((not is_buy) and old_sl > entry)
+        default_sl_dist = (2.0 * atr_15) if is_m15 else (3.0 * atr_1h)
+        init_sl_dist = abs(entry - old_sl) if sl_on_loss_side else default_sl_dist
+        init_sl_dist = max(init_sl_dist, point * 20.0)
+
+        meta = {
+            "is_bot": is_bot,
+            "is_m15": is_m15,
+            "init_sl_dist": init_sl_dist,
+            "atr1h_at_entry": atr_1h,
+            "atr15_at_entry": atr_15,
+            "peak_price": cur,
+            "peak_ts": now_ts,
+            "trail_start_ts": None,
+        }
+        self.position_meta[ticket] = meta
+        if is_bot:
+            self.recent_bot_pos_ids[ticket] = now_ts
+        self.peak_prices[ticket] = cur
+        self.peak_timestamps[ticket] = now_ts
+        return meta, True
+
+    def manage_open_positions(
+        self,
+        snapshots_map: dict[str, MT5SymbolSnapshot],
+        open_reviews: dict[str, MT5PositionAIReview] | None = None,
+    ) -> list[dict[str, Any]]:
         """
-        Revisa posiciones abiertas en MT5 y aplica:
-        1. Cierre por agotamiento en extremo opuesto del Estocastico con vela de giro.
-        2. Break-Even + 0.35 ATR al alcanzar >= 1.1 * ATR de beneficio.
-        3. Trailing Stop escalonado desde $3.00 USD:
-           - Base: asegura 40% del ultimo pico a favor y se corre conforme sube.
-           - En mercado lento/picado: sube +10% por cada hora tras superar $3.00 (50% -> 60% -> 70% max).
-        4. Expansion del Take-Profit (+2.0 ATR) si el precio se acerca al TP.
+        Gestion de salidas CLEAN_DIFF validada IS+OOS (B_FINAL_HYBRID_ADX_0.65PCT):
+        1. Cierre Preventivo Viernes >= 21:40 UTC en activos tradicionales.
+        2. Cierre Defensivo IA de emergencia solo si CLOSE_NOW + tp_prob <= 25 + profit >= $0.40 + move_atr >= 0.75.
+        3. M15: BE +0.05R al alcanzar move_r >= 1.00 (SIN trailing).
+        4. H1: BE +0.25*ATR al alcanzar move_atr >= 1.25; Chandelier 1.50*ATR desde move_r >= 1.50 (trail_start_ts=now_ts, nunca pos.time).
         """
         actions: list[dict[str, Any]] = []
         positions = mt5.positions_get()
         if not positions:
+            if self._prune_position_meta(set()):
+                self._save_ai_state()
             return actions
 
-        now_ts = datetime.now(timezone.utc).timestamp()
+        now_utc = datetime.now(timezone.utc)
+        now_ts = now_utc.timestamp()
+        active_tickets = {int(p.ticket) for p in positions}
+        state_dirty = self._prune_position_meta(active_tickets)
+
+        # Viernes >= 21:40 UTC: Cierre preventivo obligatorio de fin de semana para activos tradicionales
+        is_friday_weekend_close = (
+            now_utc.weekday() == 4
+            and (now_utc.hour > 21 or (now_utc.hour == 21 and now_utc.minute >= 40))
+        )
 
         for pos in positions:
             ticket = int(pos.ticket)
@@ -490,128 +664,163 @@ class ExnessMT5AutonomousBot:
             old_sl = float(pos.sl)
             old_tp = float(pos.tp)
             profit_usd = float(pos.profit)
+            review = open_reviews.get(sym) if open_reviews else None
+
+            # === ESCUDO FIN DE SEMANA: CIERRE PREVENTIVO VIERNES >= 21:40 UTC (ACTIVOS TRADICIONALES) ===
+            is_traditional_asset = sym not in CRYPTO_SYMBOLS
+            if is_friday_weekend_close and is_traditional_asset:
+                res = self._close_mt5_position(
+                    pos,
+                    f"Cierre Preventivo Fin de Semana (Viernes {now_utc.strftime('%H:%M')} UTC) para blindar contra gap/spread de domingo",
+                )
+                if res:
+                    actions.append(res)
+                    self.position_meta.pop(ticket, None)
+                    state_dirty = True
+                continue
 
             info = mt5.symbol_info(sym)
             digits = int(info.digits) if info else 5
             point = float(info.point) if info else 0.00001
+            cur_spread_pts = float(info.spread) if info else 15.0
+            stops_level = float(getattr(info, "trade_stops_level", 0) or 0) if info else 0.0
             snap = snapshots_map.get(sym)
-            atr = snap.atr_price if snap and snap.atr_price > 0 else abs(entry * 0.003)
 
-            # Registrar pico a favor y su timestamp
-            if ticket not in self.peak_prices:
-                self.peak_prices[ticket] = cur
-                self.peak_timestamps[ticket] = now_ts
-            elif (is_buy and cur > self.peak_prices[ticket]) or ((not is_buy) and cur < self.peak_prices[ticket]):
-                self.peak_prices[ticket] = cur
-                self.peak_timestamps[ticket] = now_ts
-            peak = self.peak_prices[ticket]
-            hours_since_peak = max(0.0, (now_ts - self.peak_timestamps.get(ticket, now_ts)) / 3600.0)
+            meta, created_meta = self._ensure_position_meta(pos, snap, now_ts, point)
+            if created_meta:
+                state_dirty = True
 
-            # Registrar el momento en que la operacion supera por primera vez $3.00 USD
-            if profit_usd >= 3.00 and ticket not in self.profit_trail_start_ts:
-                # Si ya venia con SL en ganancia tras un reinicio, usar la hora de apertura en MT5 como respaldo
-                sl_already_in_profit = (is_buy and old_sl > entry) or ((not is_buy) and old_sl > 0 and old_sl < entry)
-                self.profit_trail_start_ts[ticket] = float(pos.time) if sl_already_in_profit else now_ts
+            is_m15 = bool(meta.get("is_m15", False))
+            atr_1h = (
+                snap.atr_price
+                if (snap and snap.atr_price > 0)
+                else float(meta.get("atr1h_at_entry") or abs(entry * 0.003))
+            )
+            atr_15 = (
+                snap.atr_15_price
+                if (snap and snap.atr_15_price > 0)
+                else float(meta.get("atr15_at_entry") or (atr_1h * 0.5))
+            )
+            init_sl_dist = max(float(meta.get("init_sl_dist") or 0.0), point * 20.0)
+            ref_atr = atr_15 if is_m15 else atr_1h
+
+            min_sl_dist = max(0.35 * ref_atr, cur_spread_pts * 1.5 * point, stops_level * point)
+            min_sl_improve = max(0.05 * ref_atr, 10.0 * point)
 
             move_in_favor = (cur - entry) if is_buy else (entry - cur)
-            move_atr = move_in_favor / atr if atr > 0 else 0.0
+            move_atr = move_in_favor / atr_1h if atr_1h > 0 else 0.0
+            move_r = move_in_favor / init_sl_dist if init_sl_dist > 0 else 0.0
 
-            # 1. ¿Salida por Estocastico en extremo opuesto + vela de giro con ganancia >= 1.2x ATR?
-            if snap is not None and move_atr >= 1.2 and profit_usd > 0.25:
-                if is_buy and snap.stoch_k >= 80.0 and snap.candle_pattern in ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING"):
-                    res = self._close_mt5_position(pos, f"Cierre BUY por Estocastico={snap.stoch_k} + {snap.candle_pattern}")
-                    if res:
-                        actions.append(res)
-                    continue
-                if (not is_buy) and snap.stoch_k <= 20.0 and snap.candle_pattern in ("BULLISH_HAMMER", "BULLISH_ENGULFING", "MORNING_STAR"):
-                    res = self._close_mt5_position(pos, f"Cierre SELL por Estocastico={snap.stoch_k} + {snap.candle_pattern}")
-                    if res:
-                        actions.append(res)
-                    continue
+            # Actualizar pico a favor con persistencia atomica
+            prev_peak = float(meta.get("peak_price", cur))
+            if (is_buy and cur > prev_peak) or ((not is_buy) and cur < prev_peak):
+                meta["peak_price"] = cur
+                meta["peak_ts"] = now_ts
+                state_dirty = True
+            peak = float(meta["peak_price"])
+            self.peak_prices[ticket] = peak
+            self.peak_timestamps[ticket] = float(meta.get("peak_ts", now_ts))
 
-            # 2. Break-Even temprano (0.55 ATR -> +0.10 ATR; 1.1 ATR -> +0.35 ATR), Trailing Escalonado ($3.00+ -> 40%..70%) y Expansion de TP
-            trail_activated = ticket in self.profit_trail_start_ts
-            if (move_atr >= 0.55 or trail_activated) and profit_usd > 0:
-                candidate_sl = old_sl
-                candidate_tp = old_tp
-                reasons: list[str] = []
-                direction = 1.0 if is_buy else -1.0
+            # === ASISTENCIA DEFENSIVA IA DE EMERGENCIA ===
+            if (
+                review is not None
+                and review.action == "CLOSE_NOW"
+                and review.tp_probability_pct <= 25
+                and profit_usd >= 0.40
+                and move_atr >= 0.75
+            ):
+                res = self._close_mt5_position(
+                    pos,
+                    f"Cierre Defensivo IA (Prob. TP={review.tp_probability_pct}%): {review.reasoning}",
+                )
+                if res:
+                    actions.append(res)
+                    self.position_meta.pop(ticket, None)
+                    state_dirty = True
+                    self.block_symbol_90m(
+                        symbol=sym,
+                        probability_pct=review.tp_probability_pct,
+                        close_type="AI_DEFENSIVE_CLOSE",
+                        profit_usd=profit_usd,
+                        reason=review.reasoning,
+                        duration_minutes=90.0,
+                    )
+                continue
 
-                # Break-Even temprano: +0.10 ATR desde 0.55 ATR; sube a +0.35 ATR desde 1.1 ATR
-                if move_atr >= 0.55:
-                    be_atr_lock = 0.35 if move_atr >= 1.1 else 0.10
-                    be_plus = round(entry + direction * (be_atr_lock * atr), digits)
-                    be_is_better = (be_plus > candidate_sl) if is_buy else (candidate_sl <= 0 or be_plus < candidate_sl)
-                    be_valid_dist = (be_plus < cur - (15 * point)) if is_buy else (be_plus > cur + (15 * point))
-                    if be_is_better and be_valid_dist:
-                        candidate_sl = be_plus
-                        reasons.append(f"Break-Even+{be_atr_lock:.2f}ATR")
+            if move_in_favor <= 0.0:
+                continue
 
-                # Trailing porcentual desde $3.00 USD (40% base; +10%/hora hasta 70% en mercado lento/picado)
-                if trail_activated:
-                    hours_since_3usd = max(0.0, (now_ts - self.profit_trail_start_ts[ticket]) / 3600.0)
-                    slow_choppy = self._is_slow_choppy_market(snap, hours_since_peak)
-                    if slow_choppy:
-                        hourly_steps = min(3, int(hours_since_3usd))  # 1h->50%, 2h->60%, 3h+->70%
-                        keep = 0.40 + (0.10 * hourly_steps)
-                        mode_tag = "lento/picado"
-                    else:
-                        keep = 0.60 if move_atr >= 3.5 else 0.40
-                        mode_tag = "tendencia"
+            candidate_sl = old_sl
+            reasons: list[str] = []
+            direction = 1.0 if is_buy else -1.0
 
-                    peak_move = abs(peak - entry)
-                    lock_sl = round(entry + direction * (peak_move * keep), digits)
-                    lock_is_better = (lock_sl > candidate_sl) if is_buy else (candidate_sl <= 0 or lock_sl < candidate_sl)
-                    lock_valid_dist = (lock_sl < cur - (15 * point)) if is_buy else (lock_sl > cur + (15 * point))
-                    if peak_move > 0 and lock_is_better and lock_valid_dist:
-                        candidate_sl = lock_sl
-                        reasons.append(f"Trailing {int(round(keep * 100))}% pico ({mode_tag})")
+            if is_m15:
+                # M15 CLEAN_DIFF: Break-Even +0.05R al alcanzar move_r >= 1.00, SIN trailing
+                if move_r >= 1.00:
+                    be_px = round(entry + direction * (0.05 * init_sl_dist), digits)
+                    be_better = (be_px > candidate_sl) if is_buy else (candidate_sl <= 0 or be_px < candidate_sl)
+                    be_valid = (be_px < cur - min_sl_dist) if is_buy else (be_px > cur + min_sl_dist)
+                    if be_better and be_valid:
+                        candidate_sl = be_px
+                        reasons.append("M15 Break-Even +0.05R")
+            else:
+                # H1 CLEAN_DIFF: Break-Even +0.25*ATR @ 1.25*ATR + Chandelier 1.50*ATR desde 1.50R
+                if move_atr >= 1.25:
+                    be_px = round(entry + direction * (0.25 * atr_1h), digits)
+                    be_better = (be_px > candidate_sl) if is_buy else (candidate_sl <= 0 or be_px < candidate_sl)
+                    be_valid = (be_px < cur - min_sl_dist) if is_buy else (be_px > cur + min_sl_dist)
+                    if be_better and be_valid:
+                        candidate_sl = be_px
+                        reasons.append("H1 Break-Even +0.25ATR")
 
-                # Si se acerca al TP, expandir TP +2.0 ATR para dejar correr la ganancia
-                if old_tp > 0:
-                    dist_to_tp = (old_tp - cur) if is_buy else (cur - old_tp)
-                    if dist_to_tp <= (0.5 * atr):
-                        candidate_tp = round(cur + direction * (2.0 * atr), digits)
-                        reasons.append("Expansion TP +2.0ATR")
+                if move_r >= 1.50:
+                    if not meta.get("trail_start_ts"):
+                        # BUG-01 FIX: fijar siempre now_ts (NUNCA float(pos.time))
+                        meta["trail_start_ts"] = now_ts
+                        self.profit_trail_start_ts[ticket] = now_ts
+                        state_dirty = True
+                    ch_sl = round(peak - direction * (1.50 * atr_1h), digits)
+                    ch_better = (ch_sl > candidate_sl) if is_buy else (candidate_sl <= 0 or ch_sl < candidate_sl)
+                    ch_valid = (ch_sl < cur - min_sl_dist) if is_buy else (ch_sl > cur + min_sl_dist)
+                    if ch_better and ch_valid:
+                        candidate_sl = ch_sl
+                        reasons.append("H1 Chandelier 1.50ATR")
 
-                if is_buy:
-                    sl_improved = candidate_sl > old_sl + (5 * point)
-                    tp_improved = candidate_tp > old_tp + (10 * point)
-                else:
-                    sl_improved = old_sl <= 0 or candidate_sl < old_sl - (5 * point)
-                    tp_improved = old_tp > 0 and candidate_tp < old_tp - (10 * point)
+            if is_buy:
+                sl_improved = candidate_sl > old_sl + min_sl_improve
+            else:
+                sl_improved = old_sl <= 0 or candidate_sl < old_sl - min_sl_improve
 
-                if sl_improved or tp_improved:
-                    new_sl = candidate_sl if sl_improved else old_sl
-                    new_tp = candidate_tp if tp_improved else old_tp
-                    mod_ok = self._modify_mt5_sl_tp(ticket, sym, new_sl, new_tp)
-                    if mod_ok:
-                        evt = {
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "ticket": ticket,
-                            "symbol": sym,
-                            "side": "ADJUST_SL_TP",
-                            "old_sl": old_sl,
-                            "new_sl": new_sl,
-                            "old_tp": old_tp,
-                            "new_tp": new_tp,
-                            "profit_usd": round(profit_usd, 2),
-                            "reason": " | ".join(reasons),
-                        }
-                        self._append_history(evt)
-                        actions.append(evt)
-                        logger.info(
-                            "MT5 SL/TP MOVIDO EN GANANCIA (%s #%d): SL %s -> %s | TP %s -> %s | PnL $%.2f | %s",
-                            sym,
-                            ticket,
-                            old_sl,
-                            new_sl,
-                            old_tp,
-                            new_tp,
-                            profit_usd,
-                            evt["reason"],
-                        )
+            if sl_improved:
+                mod_ok = self._modify_mt5_sl_tp(ticket, sym, candidate_sl, old_tp)
+                if mod_ok:
+                    evt = {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "ticket": ticket,
+                        "symbol": sym,
+                        "side": "ADJUST_SL_TP",
+                        "old_sl": old_sl,
+                        "new_sl": candidate_sl,
+                        "old_tp": old_tp,
+                        "new_tp": old_tp,
+                        "profit_usd": round(profit_usd, 2),
+                        "reason": " | ".join(reasons),
+                    }
+                    self._append_history(evt)
+                    actions.append(evt)
+                    logger.info(
+                        "MT5 SL MOVIDO CLEAN_DIFF (%s #%d): SL %s -> %s | TP %s | PnL $%.2f | %s",
+                        sym,
+                        ticket,
+                        old_sl,
+                        candidate_sl,
+                        old_tp,
+                        profit_usd,
+                        evt["reason"],
+                    )
 
+        if state_dirty:
+            self._save_ai_state()
         return actions
 
     def calculate_safe_lot_and_sl(
@@ -620,29 +829,26 @@ class ExnessMT5AutonomousBot:
         side: str,
         equity_usd: float,
         free_margin_usd: float,
+        ai_probability_pct: int = 70,
+        risk_scale: float = 1.0,
     ) -> tuple[float, float, float, float]:
         """
-        Calcula (lotes, sl_price, tp_price, riesgo_usd) asegurando que:
-        1. El riesgo monetario sea ~1% de la cuenta (minimo $1.00 USD, tope de seguridad $1.35 USD para cuentas de $10).
-        2. Si con el lote minimo (0.01) la distancia estructural de SL excede $1.35 USD, ajusta la distancia del SL
-           para que la perdida maxima en caso de tocar SL nunca supere ~$1.25 USD.
+        Calcula (lotes, sl_price, tp_price, riesgo_usd) con sizing proporcional (1.00% / max 1.25%),
+        veto estricto de compresion SL > 20%, redondeo math.floor acotado, escalado gradual por margen
+        y TP fijo 2.5R (FIXED_2.5R) tanto en H1 como en M15.
+        Retorna (0.0, 0.0, 0.0, 0.0) si la orden debe vetarse o falla el calculo del broker.
         """
         is_buy = side == "BUY"
         entry = snap.ask if is_buy else snap.bid
         order_type = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
 
-        # Adaptación dinámica de Fase según el capital real disponible:
-        # - Fase 1 (< $28 USD): Riesgo tope $1.35 USD (cuentas de $10-$25)
-        # - Fase 2 ($28 - $60 USD): Riesgo objetivo ~$1.50 - $1.85 USD, tope $2.20 USD
-        # - Fase 3 ($60 - $150 USD): Riesgo objetivo ~$2.20 - $3.50 USD, tope $4.00 USD
-        # - Fase 4 ($150 - $400 USD): Riesgo objetivo ~$5.00 - $8.00 USD, tope $9.00 USD
-        # - Fase 5 (>= $400 USD): Cuenta Institucional Pro ($500+). Riesgo objetivo 1.8% (~$9 - $12 USD), tope $15.00 USD
-        if equity_usd >= 400.0:
-            target_risk_usd = round(equity_usd * 0.018, 2)
-            max_allowed_risk_usd = 15.00
+        # Riesgo proporcional continuo (1.00% target / 1.25% max para equity >= $250, concentrado a max 3 pos)
+        if equity_usd >= 250.0:
+            target_risk_usd = round(equity_usd * 0.0100, 2)
+            max_allowed_risk_usd = round(equity_usd * 0.0125, 2)
         elif equity_usd >= 150.0:
-            target_risk_usd = round(equity_usd * 0.025, 2)
-            max_allowed_risk_usd = 8.00
+            target_risk_usd = round(equity_usd * 0.015, 2)
+            max_allowed_risk_usd = round(equity_usd * 0.020, 2)
         elif equity_usd >= 60.0:
             target_risk_usd = round(equity_usd * 0.035, 2)
             max_allowed_risk_usd = 3.50
@@ -653,51 +859,100 @@ class ExnessMT5AutonomousBot:
             target_risk_usd = max(self.min_risk_usd, round(equity_usd * self.risk_pct, 2))
             max_allowed_risk_usd = max(target_risk_usd, self.max_risk_usd_cap)
 
+        # Conviction Sizing suavizado: <69 -> 0.75x, 69..77 -> 0.95x, >=78 -> 1.10x
+        if ai_probability_pct < 69:
+            conv_scale = 0.75
+        elif ai_probability_pct < 78:
+            conv_scale = 0.95
+        else:
+            conv_scale = 1.10
+
+        applied_risk_scale = max(0.1, float(risk_scale))
+        target_risk_usd = max(1.00, round(target_risk_usd * conv_scale * applied_risk_scale, 2))
+        # BUG-08 FIX: ni conv_scale < 1.0 ni risk_scale < 1.0 comprimen max_allowed_risk_usd
+        max_allowed_risk_usd = max(
+            1.20,
+            round(max_allowed_risk_usd * max(1.0, conv_scale) * max(1.0, applied_risk_scale), 2),
+        )
+
         raw_sl = snap.structural_long_sl if is_buy else snap.structural_short_sl
         loss_at_min_lot = mt5.order_calc_profit(order_type, snap.symbol, snap.min_lot, entry, raw_sl)
-        abs_loss_min_lot = abs(float(loss_at_min_lot)) if loss_at_min_lot is not None else 1.0
+        if loss_at_min_lot is None:
+            logger.warning("order_calc_profit devolvio None para %s (%s); entrada abortada.", snap.symbol, side)
+            return 0.0, 0.0, 0.0, 0.0
+        abs_loss_min_lot = abs(float(loss_at_min_lot))
+        if abs_loss_min_lot <= 0.0:
+            return 0.0, 0.0, 0.0, 0.0
+
+        step = snap.lot_step if snap.lot_step > 0 else 0.01
+        step_str = f"{step:.8f}".rstrip("0").rstrip(".")
+        lot_decimals = len(step_str.split(".")[1]) if "." in step_str else 0
 
         lot = snap.min_lot
         sl_price = raw_sl
 
-        if abs_loss_min_lot > max_allowed_risk_usd and abs_loss_min_lot > 0:
-            # Acota la distancia del SL para que con el lote base el riesgo no supere max_allowed_risk_usd
+        if abs_loss_min_lot > max_allowed_risk_usd:
+            # BUG-03 FIX: vetar si la compresion necesaria del SL estructural excede 20%
             scale = max_allowed_risk_usd / abs_loss_min_lot
+            compression_ratio = 1.0 - scale
+            if compression_ratio > 0.20:
+                logger.info(
+                    "VETO COMPRESION SL >20%% (%s): min_lot arriesga $%.2f > max $%.2f (compresion %.1f%%).",
+                    snap.symbol,
+                    abs_loss_min_lot,
+                    max_allowed_risk_usd,
+                    compression_ratio * 100.0,
+                )
+                return 0.0, 0.0, 0.0, 0.0
             adj_dist = max(abs(entry - raw_sl) * scale, snap.point * 35.0)
             sl_price = round(entry - adj_dist if is_buy else entry + adj_dist, snap.digits)
             recalc = mt5.order_calc_profit(order_type, snap.symbol, lot, entry, sl_price)
-            risk_usd = abs(float(recalc)) if recalc is not None else max_allowed_risk_usd
+            if recalc is None:
+                return 0.0, 0.0, 0.0, 0.0
+            risk_usd = abs(float(recalc))
         else:
-            # Si el riesgo con lote minimo es inferior al objetivo, escala los lotes manteniendo margen seguro
-            if abs_loss_min_lot > 0:
-                raw_lots = (target_risk_usd / abs_loss_min_lot) * snap.min_lot
-                steps = max(1, int(round(raw_lots / snap.lot_step)))
-                candidate_lot = round(steps * snap.lot_step, 2)
+            raw_lots = (target_risk_usd / abs_loss_min_lot) * snap.min_lot
+            steps = max(1, int(math.floor((raw_lots / step) + 1e-9)))
+            candidate_lot = max(snap.min_lot, round(steps * step, lot_decimals))
 
-                # Topes prudentes por activo para evitar sobre-exposicion en un solo trade
-                if snap.symbol in ("EURUSDm", "GBPUSDm", "USDJPYm", "USDCADm", "USDCHFm", "EURGBPm", "EURJPYm", "AUDUSDm", "NZDUSDm"):
-                    candidate_lot = min(candidate_lot, 0.10)  # Max 0.10 lotes (1 mini-lote) en Forex
-                elif snap.symbol == "XAUUSDm":
-                    candidate_lot = min(candidate_lot, 0.03)  # Max 0.03 en Oro
-                elif snap.symbol == "BTCUSDm":
-                    candidate_lot = min(candidate_lot, 0.03)  # Max 0.03 en Bitcoin
-                elif snap.symbol == "ETHUSDm":
-                    candidate_lot = min(candidate_lot, 1.50)  # Max 1.50 en Ethereum
-                elif snap.symbol in ("US500m", "USTECm"):
-                    candidate_lot = min(candidate_lot, 0.50)  # Max 0.50 contratos en Indices
+            # Asegurar que el riesgo real nunca supere max_allowed_risk_usd
+            while candidate_lot > snap.min_lot and ((candidate_lot / snap.min_lot) * abs_loss_min_lot) > max_allowed_risk_usd + 1e-9:
+                steps = max(1, steps - 1)
+                candidate_lot = max(snap.min_lot, round(steps * step, lot_decimals))
 
-                margin_req = mt5.order_calc_margin(order_type, snap.symbol, candidate_lot, entry) or 999999.0
-                max_margin_ratio = 0.35 if equity_usd >= 400.0 else 0.65
-                if margin_req <= free_margin_usd * max_margin_ratio:
-                    lot = max(snap.min_lot, candidate_lot)
+            # Escalado gradual por margen disponible <= min(free_margin * 0.35, equity * 0.15) sin caps arbitrarios
+            margin_budget = min(free_margin_usd * 0.35, equity_usd * 0.15)
+            margin_req = mt5.order_calc_margin(order_type, snap.symbol, candidate_lot, entry)
+            if margin_req is None:
+                return 0.0, 0.0, 0.0, 0.0
+            if margin_req <= margin_budget:
+                lot = candidate_lot
+            else:
+                margin_min = mt5.order_calc_margin(order_type, snap.symbol, snap.min_lot, entry)
+                if margin_min is None or margin_min <= 0.0 or margin_min > free_margin_usd * 0.78:
+                    return 0.0, 0.0, 0.0, 0.0
+                if margin_budget >= margin_min:
+                    aff_lots = (margin_budget / margin_min) * snap.min_lot
+                    aff_steps = max(1, int(math.floor((aff_lots / step) + 1e-9)))
+                    lot = max(snap.min_lot, min(candidate_lot, round(aff_steps * step, lot_decimals)))
+                else:
+                    lot = snap.min_lot
+
             recalc = mt5.order_calc_profit(order_type, snap.symbol, lot, entry, sl_price)
-            risk_usd = abs(float(recalc)) if recalc is not None else abs_loss_min_lot
+            if recalc is None:
+                return 0.0, 0.0, 0.0, 0.0
+            risk_usd = abs(float(recalc))
+            while lot > snap.min_lot and risk_usd > max_allowed_risk_usd + 1e-9:
+                cur_steps = max(1, int(math.floor((lot / step) + 1e-9)) - 1)
+                lot = max(snap.min_lot, round(cur_steps * step, lot_decimals))
+                recalc = mt5.order_calc_profit(order_type, snap.symbol, lot, entry, sl_price)
+                if recalc is None:
+                    return 0.0, 0.0, 0.0, 0.0
+                risk_usd = abs(float(recalc))
 
+        # TP fijo FIXED_2.5R tanto en H1 como en M15
         sl_dist = abs(entry - sl_price)
-        if snap.entry_pillar.startswith("P5_DOUBLE_RSI"):
-            tp_dist = snap.atr_price * 0.80
-        else:
-            tp_dist = max(sl_dist * 2.4, snap.atr_price * 3.0)
+        tp_dist = sl_dist * 2.5
         tp_price = round(entry + tp_dist if is_buy else entry - tp_dist, snap.digits)
 
         return lot, sl_price, tp_price, round(risk_usd, 2)
@@ -729,6 +984,7 @@ class ExnessMT5AutonomousBot:
             }
             self._append_history(evt)
             self.last_order_timestamp = time.time()
+            self._save_ai_state()
             return evt
 
         info = mt5.symbol_info(snap.symbol)
@@ -766,21 +1022,39 @@ class ExnessMT5AutonomousBot:
             )
             return None
 
+        exec_price = float(result.price or price)
+        ticket = int(result.order)
+        now_ts = time.time()
+        self.position_meta[ticket] = {
+            "is_bot": True,
+            "is_m15": snap.entry_pillar.startswith("M15_SCALPER"),
+            "init_sl_dist": max(abs(exec_price - sl_price), snap.point * 20.0),
+            "atr1h_at_entry": snap.atr_price,
+            "atr15_at_entry": snap.atr_15_price if snap.atr_15_price > 0 else (snap.atr_price * 0.5),
+            "peak_price": exec_price,
+            "peak_ts": now_ts,
+            "trail_start_ts": None,
+        }
+        self.recent_bot_pos_ids[ticket] = now_ts
+        self.peak_prices[ticket] = exec_price
+        self.peak_timestamps[ticket] = now_ts
+
         evt = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "ticket": int(result.order),
+            "ticket": ticket,
             "symbol": snap.symbol,
             "side": side,
             "mode": "LIVE",
             "lot": lot,
-            "price": float(result.price or price),
+            "price": exec_price,
             "sl": sl_price,
             "tp": tp_price,
             "risk_usd": risk_usd,
             "reason": reason,
         }
         self._append_history(evt)
-        self.last_order_timestamp = time.time()
+        self.last_order_timestamp = now_ts
+        self._save_ai_state()
         logger.info(
             "ORDEN MT5 EJECUTADA: %s %s | Lote: %s @ %s | SL: %s | TP: %s | Riesgo: ~$%.2f USD | %s",
             side,
@@ -806,7 +1080,18 @@ class ExnessMT5AutonomousBot:
             "magic": MT5_MAGIC_NUMBER,
         }
         res = mt5.order_send(request)
-        return res is not None and res.retcode == mt5.TRADE_RETCODE_DONE
+        if res is None or res.retcode != mt5.TRADE_RETCODE_DONE:
+            logger.warning(
+                "Error al modificar SL/TP en %s #%d (SL=%s, TP=%s): retcode=%s, comment=%s",
+                symbol,
+                ticket,
+                new_sl,
+                new_tp,
+                getattr(res, "retcode", None),
+                getattr(res, "comment", mt5.last_error()),
+            )
+            return False
+        return True
 
     def _close_mt5_position(self, pos: Any, reason: str) -> dict[str, Any] | None:
         sym = str(pos.symbol)
@@ -857,7 +1142,846 @@ class ExnessMT5AutonomousBot:
             except Exception:
                 items = []
         items.append(event)
-        self.history_file.write_text(json.dumps(items[-300:], indent=2, ensure_ascii=False), encoding="utf-8")
+        self._atomic_write_text(self.history_file, json.dumps(items[-300:], indent=2, ensure_ascii=False))
+
+    def _load_ai_state(self) -> None:
+        if not self.ai_state_file.exists():
+            return
+        try:
+            raw = json.loads(self.ai_state_file.read_text(encoding="utf-8"))
+            now_ts = time.time()
+            blocks = raw.get("symbol_blocked_until", {})
+            if isinstance(blocks, dict):
+                self.symbol_blocked_until = {
+                    str(sym): data
+                    for sym, data in blocks.items()
+                    if isinstance(data, dict) and float(data.get("until_ts", 0.0)) > now_ts
+                }
+            tickets = raw.get("evaluated_deal_tickets", [])
+            if isinstance(tickets, list):
+                self.evaluated_deal_tickets = {int(t) for t in tickets[-300:]}
+            decisions = raw.get("recent_ai_close_decisions", [])
+            if isinstance(decisions, list):
+                self.recent_ai_close_decisions = decisions[-20:]
+            self.last_order_timestamp = float(raw.get("last_order_timestamp", 0.0) or 0.0)
+            pos_meta_raw = raw.get("position_meta", {})
+            if isinstance(pos_meta_raw, dict):
+                self.position_meta = {}
+                for k, v in pos_meta_raw.items():
+                    if isinstance(v, dict):
+                        t_id = int(k)
+                        self.position_meta[t_id] = dict(v)
+                        if v.get("peak_price") is not None:
+                            self.peak_prices[t_id] = float(v["peak_price"])
+                        if v.get("peak_ts") is not None:
+                            self.peak_timestamps[t_id] = float(v["peak_ts"])
+                        if v.get("trail_start_ts") is not None:
+                            self.profit_trail_start_ts[t_id] = float(v["trail_start_ts"])
+            recent_bot_raw = raw.get("recent_bot_pos_ids", {})
+            if isinstance(recent_bot_raw, dict):
+                # TTL de 48h (172800s) para reconocer cierres manuales overnight tras reinicios o _prune_position_meta
+                self.recent_bot_pos_ids = {
+                    int(k): float(ts)
+                    for k, ts in recent_bot_raw.items()
+                    if (now_ts - float(ts)) <= 172800.0
+                }
+        except Exception as exc:
+            logger.warning("No se pudo cargar estado IA MT5 (%s): %s", self.ai_state_file, exc)
+
+    def _save_ai_state(self) -> None:
+        now_ts = time.time()
+        active_blocks = {
+            sym: data
+            for sym, data in self.symbol_blocked_until.items()
+            if float(data.get("until_ts", 0.0)) > now_ts
+        }
+        self.symbol_blocked_until = active_blocks
+        active_recent_bot_ids = {
+            pid: ts
+            for pid, ts in self.recent_bot_pos_ids.items()
+            if (now_ts - float(ts)) <= 172800.0
+        }
+        self.recent_bot_pos_ids = active_recent_bot_ids
+        payload = {
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+            "last_order_timestamp": self.last_order_timestamp,
+            "position_meta": {str(k): v for k, v in self.position_meta.items()},
+            "recent_bot_pos_ids": {str(k): v for k, v in active_recent_bot_ids.items()},
+            "symbol_blocked_until": active_blocks,
+            "evaluated_deal_tickets": sorted(self.evaluated_deal_tickets)[-300:],
+            "recent_ai_close_decisions": self.recent_ai_close_decisions[-20:],
+        }
+        self._atomic_write_text(self.ai_state_file, json.dumps(payload, indent=2, ensure_ascii=False))
+
+    @staticmethod
+    def _get_usd_direction(symbol: str, side: str) -> str:
+        is_buy = str(side).upper() in ("BUY", "LONG")
+        if symbol in ("EURUSDm", "GBPUSDm", "AUDUSDm", "NZDUSDm", "XAUUSDm"):
+            return "USD_SHORT" if is_buy else "USD_LONG"
+        if symbol in ("USDJPYm", "USDCADm", "USDCHFm"):
+            return "USD_LONG" if is_buy else "USD_SHORT"
+        return "NON_USD_FOREX"
+
+    @staticmethod
+    def _is_twin_conflict(symbol: str, open_symbols: set[str]) -> bool:
+        for cluster in TWIN_CORRELATION_CLUSTERS:
+            if symbol in cluster and any(s in open_symbols for s in cluster if s != symbol):
+                return True
+        return False
+
+    def _get_open_position_ids(self) -> set[int]:
+        open_pos = mt5.positions_get() or ()
+        ids: set[int] = set()
+        for p in open_pos:
+            t = int(getattr(p, "ticket", 0) or 0)
+            ident = int(getattr(p, "identifier", 0) or 0)
+            if t > 0:
+                ids.add(t)
+            if ident > 0:
+                ids.add(ident)
+        return ids
+
+    def _is_bot_position_deals(
+        self,
+        pos_id: int,
+        deals_for_pos: list[Any],
+        known_bot_pos_ids: set[int] | None = None,
+    ) -> bool:
+        if any(int(getattr(x, "magic", -1)) == MT5_MAGIC_NUMBER for x in deals_for_pos):
+            return True
+        known_ids = known_bot_pos_ids if known_bot_pos_ids is not None else self.known_bot_pos_ids
+        if pos_id in known_ids:
+            return True
+        is_tracked_bot = (
+            (pos_id in self.position_meta and bool(self.position_meta[pos_id].get("is_bot", True)))
+            or (pos_id in self.recent_bot_pos_ids)
+        )
+        if is_tracked_bot:
+            if any(
+                int(getattr(x, "magic", -1)) == 0 and int(getattr(x, "reason", -1)) in (0, 1, 2)
+                for x in deals_for_pos
+            ):
+                return True
+        return False
+
+    def _compute_symbol_performance_14d(
+        self,
+        now_utc: datetime | None = None,
+        open_position_ids: set[int] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        ref_utc = now_utc or datetime.now(timezone.utc)
+        if ref_utc.tzinfo is None:
+            ref_utc = ref_utc.replace(tzinfo=timezone.utc)
+        else:
+            ref_utc = ref_utc.astimezone(timezone.utc)
+
+        deals = mt5.history_deals_get(ref_utc - timedelta(days=14), ref_utc + timedelta(minutes=60))
+        if not deals:
+            return {}
+
+        open_ids = open_position_ids if open_position_ids is not None else self._get_open_position_ids()
+        by_pos: dict[int, list[Any]] = {}
+        discovered_bot_ids: set[int] = set()
+        now_ts = ref_utc.timestamp()
+        for d in deals:
+            pos_id = int(getattr(d, "position_id", 0) or 0)
+            if pos_id > 0:
+                by_pos.setdefault(pos_id, []).append(d)
+                if int(getattr(d, "magic", -1)) == MT5_MAGIC_NUMBER:
+                    discovered_bot_ids.add(pos_id)
+                    deal_ts = float(getattr(d, "time", 0.0) or 0.0)
+                    if deal_ts > 0 and (now_ts - deal_ts) <= 172800.0:
+                        self.recent_bot_pos_ids[pos_id] = max(self.recent_bot_pos_ids.get(pos_id, 0.0), deal_ts)
+
+        if discovered_bot_ids:
+            self.known_bot_pos_ids.update(discovered_bot_ids)
+
+        stats: dict[str, dict[str, Any]] = {}
+        for pos_id, dlist in by_pos.items():
+            if pos_id in open_ids:
+                continue
+            if not self._is_bot_position_deals(pos_id, dlist, known_bot_pos_ids=self.known_bot_pos_ids):
+                continue
+            outs = [x for x in dlist if int(getattr(x, "entry", -1)) == mt5.DEAL_ENTRY_OUT]
+            if not outs:
+                continue
+            sym = str(outs[-1].symbol)
+            pnl = sum(
+                float(getattr(x, "profit", 0.0) or 0.0)
+                + float(getattr(x, "swap", 0.0) or 0.0)
+                + float(getattr(x, "commission", 0.0) or 0.0)
+                for x in outs
+            )
+            s = stats.setdefault(sym, {"trades": 0, "wins": 0, "net_pnl_usd": 0.0})
+            s["trades"] += 1
+            if pnl > 0:
+                s["wins"] += 1
+            s["net_pnl_usd"] += pnl
+
+        result: dict[str, dict[str, Any]] = {}
+        for sym, s in stats.items():
+            trades = int(s["trades"])
+            wr = round((s["wins"] / trades) * 100.0, 1) if trades > 0 else 50.0
+            net_pnl = round(float(s["net_pnl_usd"]), 2)
+            needs_higher_bar = trades >= 4 and (wr < 50.0 or net_pnl < -3.00)
+            result[sym] = {
+                "trades": trades,
+                "wins": int(s["wins"]),
+                "win_rate_pct": wr,
+                "net_pnl_usd": net_pnl,
+                "min_required_prob_pct": 65 if needs_higher_bar else 58,
+            }
+        return result
+
+    def _evaluate_daily_risk_guard(
+        self,
+        now_utc: datetime | None = None,
+        equity_usd: float = 590.0,
+        open_position_ids: set[int] | None = None,
+        known_bot_pos_ids: set[int] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Daily Risk Guard SOFT (B_FINAL_HYBRID_ADX_0.65PCT) sobre el dia UTC actual:
+        - Filtra por magic == MT5_MAGIC_NUMBER, excluye posiciones aun abiertas y suma profit + swap + commission.
+        - Hard Daily Loss Stop: daily_closed_pnl_usd <= -3% equity -> pause_new_entries=True.
+        - Freno de racha: 3 perdidas seguidas con mins_since_last_loss < 45m -> pause_new_entries=True (45m).
+        - MODO_PROTECCION_CAPITAL: daily_closed_pnl_usd >= +4% equity o >= 2 perdidas seguidas ->
+          min_ai_prob=68, risk_scale=0.75, max_positions=3 (normal: max_positions=4).
+        """
+        ref_utc = now_utc or datetime.now(timezone.utc)
+        if ref_utc.tzinfo is None:
+            ref_utc = ref_utc.replace(tzinfo=timezone.utc)
+        else:
+            ref_utc = ref_utc.astimezone(timezone.utc)
+
+        utc_day_start = ref_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start_ts = int(utc_day_start.timestamp())
+        now_ts = ref_utc.timestamp()
+        eq_ref = max(1.0, float(equity_usd))
+
+        open_ids = open_position_ids if open_position_ids is not None else self._get_open_position_ids()
+        deals = mt5.history_deals_get(utc_day_start, ref_utc + timedelta(minutes=60))
+        by_pos_all: dict[int, list[Any]] = {}
+        by_pos_outs: dict[int, list[Any]] = {}
+        if deals:
+            for d in deals:
+                pos_id = int(getattr(d, "position_id", 0) or 0)
+                if pos_id <= 0 or pos_id in open_ids:
+                    continue
+                by_pos_all.setdefault(pos_id, []).append(d)
+                if int(getattr(d, "entry", -1)) != mt5.DEAL_ENTRY_OUT:
+                    continue
+                deal_time = int(getattr(d, "time", 0) or 0)
+                if deal_time < day_start_ts:
+                    continue
+                by_pos_outs.setdefault(pos_id, []).append(d)
+
+        closed_positions: list[tuple[int, int, float]] = []
+        for pos_id, outs in by_pos_outs.items():
+            if not self._is_bot_position_deals(pos_id, by_pos_all.get(pos_id, outs), known_bot_pos_ids=known_bot_pos_ids):
+                continue
+            close_time = max(int(getattr(x, "time", 0) or 0) for x in outs)
+            max_ticket = max(int(getattr(x, "ticket", 0) or 0) for x in outs)
+            pnl = sum(
+                float(getattr(x, "profit", 0.0) or 0.0)
+                + float(getattr(x, "swap", 0.0) or 0.0)
+                + float(getattr(x, "commission", 0.0) or 0.0)
+                for x in outs
+            )
+            closed_positions.append((close_time, max_ticket, pnl))
+
+        closed_positions.sort(key=lambda item: (item[0], item[1]))
+
+        daily_closed_pnl_usd = round(sum(item[2] for item in closed_positions), 2)
+        wins_today = sum(1 for item in closed_positions if item[2] > 0.0)
+        losses_today = sum(1 for item in closed_positions if item[2] < 0.0)
+
+        consecutive_losses = 0
+        for _, _, pnl in reversed(closed_positions):
+            if pnl < 0.0:
+                consecutive_losses += 1
+            else:
+                break
+
+        loss_times = [item[0] for item in closed_positions if item[2] < 0.0]
+        if loss_times:
+            last_loss_ts = float(max(loss_times))
+            mins_since_last_loss = round(max(0.0, (now_ts - last_loss_ts) / 60.0), 1)
+        else:
+            mins_since_last_loss = 999.0
+
+        hard_loss_limit_usd = round(-0.03 * eq_ref, 2)
+        profit_protect_usd = round(0.04 * eq_ref, 2)
+        hard_daily_loss_stop = daily_closed_pnl_usd <= (-0.03 * eq_ref)
+        streak_pause = bool(consecutive_losses >= 3 and mins_since_last_loss < 45.0)
+        pause_new_entries = bool(hard_daily_loss_stop or streak_pause)
+        protection_triggered = bool(
+            (daily_closed_pnl_usd >= (0.04 * eq_ref))
+            or (consecutive_losses >= 2)
+            or hard_daily_loss_stop
+        )
+
+        if streak_pause:
+            pause_remaining_mins = round(max(0.0, 45.0 - mins_since_last_loss), 1)
+        elif hard_daily_loss_stop:
+            next_midnight = utc_day_start + timedelta(days=1)
+            pause_remaining_mins = round(max(1.0, (next_midnight.timestamp() - now_ts) / 60.0), 1)
+        else:
+            pause_remaining_mins = 0.0
+
+        if protection_triggered:
+            protection_mode = "MODO_PROTECCION_CAPITAL"
+            min_ai_prob = 68
+            risk_scale = 0.75
+            max_positions = 3
+            triggers: list[str] = []
+            if hard_daily_loss_stop:
+                triggers.append(f"Hard Daily Loss Stop (${daily_closed_pnl_usd:+.2f} <= ${hard_loss_limit_usd:+.2f} = -3% equity)")
+            if daily_closed_pnl_usd >= (0.04 * eq_ref):
+                triggers.append(f"Ganancia diaria +${daily_closed_pnl_usd:.2f} >= +${profit_protect_usd:.2f} (+4% equity)")
+            if streak_pause:
+                triggers.append(f"Racha de {consecutive_losses} perdidas seguidas (pausa 45m: {pause_remaining_mins:.1f}m restantes)")
+            elif consecutive_losses >= 2:
+                triggers.append(f"Racha de {consecutive_losses} perdidas seguidas")
+            reason = " | ".join(triggers)
+        else:
+            protection_mode = "NORMAL"
+            min_ai_prob = 60
+            risk_scale = 1.0
+            max_positions = 4
+            reason = "Operacion normal (sin disparadores diarios)"
+
+        return {
+            "utc_date": ref_utc.strftime("%Y-%m-%d"),
+            "daily_closed_pnl_usd": daily_closed_pnl_usd,
+            "closed_trades_today": len(closed_positions),
+            "wins_today": wins_today,
+            "losses_today": losses_today,
+            "consecutive_losses": consecutive_losses,
+            "mins_since_last_loss": mins_since_last_loss,
+            "hard_daily_loss_stop": hard_daily_loss_stop,
+            "protection_mode": protection_mode,
+            "protection_active": protection_triggered,
+            "pause_new_entries": pause_new_entries,
+            "pause_remaining_mins": pause_remaining_mins,
+            "min_ai_prob": min_ai_prob,
+            "risk_scale": risk_scale,
+            "max_positions": max_positions,
+            "reason": reason,
+        }
+
+    def block_symbol_90m(
+        self,
+        symbol: str,
+        probability_pct: int,
+        close_type: str,
+        profit_usd: float,
+        reason: str,
+        duration_minutes: float = 90.0,
+    ) -> None:
+        mins = max(1.0, float(duration_minutes))
+        until_ts = time.time() + mins * 60.0
+        until_utc = datetime.fromtimestamp(until_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        self.symbol_blocked_until[symbol] = {
+            "symbol": symbol,
+            "until_ts": until_ts,
+            "until_utc": until_utc,
+            "duration_minutes": round(mins, 1),
+            "probability_pct": int(probability_pct),
+            "close_type": close_type,
+            "profit_usd": round(float(profit_usd), 2),
+            "reason": reason,
+        }
+        self._save_ai_state()
+
+    def get_active_block(self, symbol: str) -> dict[str, Any] | None:
+        entry = self.symbol_blocked_until.get(symbol)
+        if not entry:
+            return None
+        remaining_sec = float(entry.get("until_ts", 0.0)) - time.time()
+        if remaining_sec <= 0:
+            self.symbol_blocked_until.pop(symbol, None)
+            self._save_ai_state()
+            return None
+        return {**entry, "remaining_minutes": round(remaining_sec / 60.0, 1)}
+
+    def _collect_recent_closed_deals(
+        self,
+        snapshots_map: dict[str, MT5SymbolSnapshot],
+        minutes_back: int = 90,
+        now_utc: datetime | None = None,
+        open_position_ids: set[int] | None = None,
+        known_bot_pos_ids: set[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        ref_utc = now_utc or datetime.now(timezone.utc)
+        if ref_utc.tzinfo is None:
+            ref_utc = ref_utc.replace(tzinfo=timezone.utc)
+        else:
+            ref_utc = ref_utc.astimezone(timezone.utc)
+        now_ts = ref_utc.timestamp()
+
+        raw_deals = mt5.history_deals_get(
+            ref_utc - timedelta(minutes=minutes_back + 30),
+            ref_utc + timedelta(minutes=60),
+        )
+        if not raw_deals:
+            return []
+
+        open_ids = open_position_ids if open_position_ids is not None else self._get_open_position_ids()
+        by_pos_all: dict[int, list[Any]] = {}
+        by_pos_outs: dict[int, list[Any]] = {}
+        for d in raw_deals:
+            pos_id = int(getattr(d, "position_id", 0) or 0)
+            if pos_id <= 0 or pos_id in open_ids:
+                continue
+            by_pos_all.setdefault(pos_id, []).append(d)
+            if int(getattr(d, "entry", -1)) == mt5.DEAL_ENTRY_OUT:
+                by_pos_outs.setdefault(pos_id, []).append(d)
+
+        grouped_closes: list[tuple[int, int, int, list[Any]]] = []
+        for pos_id, outs in by_pos_outs.items():
+            if not self._is_bot_position_deals(pos_id, by_pos_all.get(pos_id, outs), known_bot_pos_ids=known_bot_pos_ids):
+                continue
+            outs_sorted = sorted(outs, key=lambda x: (int(getattr(x, "time", 0) or 0), int(getattr(x, "ticket", 0) or 0)))
+            last_out = outs_sorted[-1]
+            grouped_closes.append((int(last_out.time), int(last_out.ticket), pos_id, outs_sorted))
+
+        grouped_closes.sort(key=lambda item: (item[0], item[1]))
+
+        results: list[dict[str, Any]] = []
+        for close_ts, last_ticket, pos_id, outs_sorted in grouped_closes:
+            delta_sec = now_ts - float(close_ts)
+            if delta_sec < -300.0:
+                continue
+            mins_since = max(0.0, delta_sec / 60.0)
+            if mins_since >= float(minutes_back):
+                continue
+            last_out = outs_sorted[-1]
+            sym = str(last_out.symbol)
+            net_pnl = round(
+                sum(
+                    float(getattr(x, "profit", 0.0) or 0.0)
+                    + float(getattr(x, "swap", 0.0) or 0.0)
+                    + float(getattr(x, "commission", 0.0) or 0.0)
+                    for x in outs_sorted
+                ),
+                2,
+            )
+            deal_reason = int(getattr(last_out, "reason", -1))
+            if deal_reason in (0, 1, 2):
+                close_type = "MANUAL"
+            elif net_pnl >= 0.0:
+                close_type = "POSITIVE"
+            else:
+                close_type = "NEGATIVE"
+
+            # En MT5, un DEAL_ENTRY_OUT tipo SELL (1) cierra un BUY; tipo BUY (0) cierra un SELL.
+            original_side = "BUY" if int(last_out.type) == mt5.DEAL_TYPE_SELL else "SELL"
+            snap = snapshots_map.get(sym)
+            closed_utc_str = datetime.fromtimestamp(close_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            results.append(
+                {
+                    "ticket": last_ticket,
+                    "position_id": pos_id,
+                    "symbol": sym,
+                    "side": original_side,
+                    "close_type": close_type,
+                    "profit_usd": net_pnl,
+                    "mins_since_close": round(mins_since, 1),
+                    "deal_reason": deal_reason,
+                    "closed_at_utc": closed_utc_str,
+                    "snapshot": asdict(snap) if snap is not None else {},
+                }
+            )
+        return results
+
+    def _build_open_positions_metrics(
+        self,
+        positions: tuple[Any, ...],
+        snapshots_map: dict[str, MT5SymbolSnapshot],
+    ) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]]]:
+        payload: list[dict[str, Any]] = []
+        by_ticket: dict[int, dict[str, Any]] = {}
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for p in positions:
+            ticket = int(p.ticket)
+            sym = str(p.symbol)
+            is_buy = p.type == mt5.POSITION_TYPE_BUY
+            otype = mt5.ORDER_TYPE_BUY if is_buy else mt5.ORDER_TYPE_SELL
+            entry = float(p.price_open)
+            cur = float(p.price_current)
+            tp = float(p.tp)
+            sl = float(p.sl)
+            profit_usd = round(float(p.profit), 2)
+
+            tp_calc = mt5.order_calc_profit(otype, sym, float(p.volume), entry, tp) if tp > 0 else 0.0
+            tp_profit_usd = round(float(tp_calc), 2) if tp_calc is not None else 0.0
+            sl_calc = mt5.order_calc_profit(otype, sym, float(p.volume), entry, sl) if sl > 0 else 0.0
+            sl_profit_usd = round(float(sl_calc), 2) if sl_calc is not None else 0.0
+
+            snap = snapshots_map.get(sym)
+            atr1h = snap.atr_price if snap and snap.atr_price > 0 else max(abs(entry * 0.003), 1e-5)
+            total_tp_dist = abs(tp - entry) if tp > 0 else 0.0
+            cur_move = (cur - entry) if is_buy else (entry - cur)
+            move_atr = round(cur_move / atr1h, 2)
+            progress_pct = round((cur_move / total_tp_dist) * 100.0, 1) if total_tp_dist > 0 else 0.0
+            rem_tp_dist = ((tp - cur) if is_buy else (cur - tp)) if tp > 0 else 0.0
+            rem_sl_dist = ((cur - sl) if is_buy else (sl - cur)) if sl > 0 else atr1h
+            pos_open_ts = float(getattr(p, "time", 0.0) or 0.0)
+            hours_open = round(max(0.0, (now_ts - pos_open_ts) / 3600.0), 2) if pos_open_ts > 0 else 0.0
+
+            metrics = {
+                "ticket": ticket,
+                "symbol": sym,
+                "side": "BUY" if is_buy else "SELL",
+                "profit_usd": profit_usd,
+                "tp_profit_usd": tp_profit_usd,
+                "sl_profit_usd": sl_profit_usd,
+                "move_atr": move_atr,
+                "hours_open": hours_open,
+                "progress_to_tp_pct": progress_pct,
+                "rem_tp_in_atr1h": round(rem_tp_dist / atr1h, 2),
+                "rem_sl_in_atr1h": round(rem_sl_dist / atr1h, 2),
+                "snapshot": asdict(snap) if snap is not None else {},
+            }
+            payload.append(metrics)
+            by_ticket[ticket] = metrics
+        return payload, by_ticket
+
+    def _get_rotatable_stagnant_positions(
+        self,
+        raw_positions: tuple[Any, ...],
+        open_metrics_by_ticket: dict[int, dict[str, Any]],
+        snapshots_map: dict[str, MT5SymbolSnapshot],
+    ) -> list[Any]:
+        """
+        Regla de Rotacion de Capital (Max 3 posiciones):
+        Evalua posiciones abiertas que llevan >= 2.5 horas abiertas, tienen ganancia positiva modesta
+        ($0.40 <= profit < $4.50) con avance < 35% hacia TP y muestran perdida de impulso futuro,
+        para poder cobrarlas y dar paso a una oportunidad fresca de mayor probabilidad (>= 68%).
+        """
+        rotatable: list[tuple[float, Any]] = []
+        for p in raw_positions:
+            ticket = int(p.ticket)
+            profit = float(p.profit)
+            if profit < 0.40 or profit >= 4.50:
+                continue
+            m = open_metrics_by_ticket.get(ticket, {})
+            hours_open = float(m.get("hours_open", 0.0))
+            progress_pct = float(m.get("progress_to_tp_pct", 0.0))
+            if hours_open < 2.5 or progress_pct >= 35.0:
+                continue
+            sym = str(p.symbol)
+            snap = snapshots_map.get(sym)
+            if snap is None:
+                continue
+            is_buy = p.type == mt5.POSITION_TYPE_BUY
+            momentum_fading = (
+                (is_buy and (not snap.macd_improving or snap.rsi_14 < 50.0 or snap.strategy_setup in ("WATCH", "EXIT_LONG", "SHORT_ENTRY")))
+                or ((not is_buy) and (snap.macd_improving or snap.rsi_14 > 50.0 or snap.strategy_setup in ("WATCH", "EXIT_SHORT", "LONG_ENTRY")))
+            )
+            if momentum_fading:
+                score = hours_open * 2.0 - profit
+                rotatable.append((score, p))
+
+        rotatable.sort(key=lambda x: x[0], reverse=True)
+        return [item[1] for item in rotatable]
+
+    def build_global_market_context(
+        self,
+        snapshots: list[MT5SymbolSnapshot],
+        daily_risk_guard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Empaqueta en una estructura compacta el pulso macro 360° de divisas USD, criptomonedas (BTC/ETH),
+        indices/oro, candado de riesgo diario y alertas de noticias/spreads para alimentar en 1 sola llamada a Gemini AI y al motor local.
+        """
+        snap_map = {s.symbol: s for s in snapshots}
+
+        # 1. Fuerza global del Dolar (USD) en los 7 pares mayores
+        usd_bullish = 0
+        usd_bearish = 0
+        for sym in ("EURUSDm", "GBPUSDm", "AUDUSDm", "NZDUSDm"):
+            s = snap_map.get(sym)
+            if not s:
+                continue
+            if (not s.above_ema_200) and s.htf_trend != "BULLISH":
+                usd_bullish += 1
+            elif s.above_ema_200 and s.htf_trend != "BEARISH":
+                usd_bearish += 1
+        for sym in ("USDJPYm", "USDCADm", "USDCHFm"):
+            s = snap_map.get(sym)
+            if not s:
+                continue
+            if s.above_ema_200 and s.htf_trend != "BEARISH":
+                usd_bullish += 1
+            elif (not s.above_ema_200) and s.htf_trend != "BULLISH":
+                usd_bearish += 1
+
+        if usd_bullish >= 5 and usd_bearish <= 1:
+            usd_bias = "USD_STRONG_BULLISH"
+        elif usd_bearish >= 5 and usd_bullish <= 1:
+            usd_bias = "USD_STRONG_BEARISH"
+        elif usd_bullish > usd_bearish + 1:
+            usd_bias = "USD_MODERATE_BULLISH"
+        elif usd_bearish > usd_bullish + 1:
+            usd_bias = "USD_MODERATE_BEARISH"
+        else:
+            usd_bias = "USD_MIXED"
+
+        # 2. Pulso del Mercado Cripto (BTCUSDm + ETHUSDm)
+        btc = snap_map.get("BTCUSDm")
+        eth = snap_map.get("ETHUSDm")
+        if btc and eth:
+            if (not btc.above_ema_200) and (not eth.above_ema_200) and btc.htf_trend in ("BEARISH", "NEUTRAL") and eth.htf_trend in ("BEARISH", "NEUTRAL"):
+                crypto_regime = "CRYPTO_ALIGNED_BEARISH"
+            elif btc.above_ema_200 and eth.above_ema_200 and btc.htf_trend in ("BULLISH", "NEUTRAL") and eth.htf_trend in ("BULLISH", "NEUTRAL"):
+                crypto_regime = "CRYPTO_ALIGNED_BULLISH"
+            else:
+                crypto_regime = "CRYPTO_DIVERGENT"
+        else:
+            crypto_regime = "CRYPTO_UNAVAILABLE"
+
+        # 3. Pulso de Indices (US500m + USTECm) y Oro (XAUUSDm)
+        sp = snap_map.get("US500m")
+        nq = snap_map.get("USTECm")
+        gold = snap_map.get("XAUUSDm")
+        if sp and nq:
+            if sp.above_ema_200 and nq.above_ema_200 and sp.htf_trend != "BEARISH" and nq.htf_trend != "BEARISH":
+                indices_regime = "WALL_STREET_BULLISH"
+            elif (not sp.above_ema_200) and (not nq.above_ema_200) and sp.htf_trend != "BULLISH" and nq.htf_trend != "BULLISH":
+                indices_regime = "WALL_STREET_BEARISH"
+            else:
+                indices_regime = "WALL_STREET_MIXED"
+        else:
+            indices_regime = "WALL_STREET_UNAVAILABLE"
+
+        # 4. Detector de Sesion y Noticias / Volatilidad de Spreads
+        now_utc = datetime.now(timezone.utc)
+        utc_hour = now_utc.hour
+        mins_of_day = utc_hour * 60 + now_utc.minute
+        rollover_blackout_active = self._is_pre_rollover_entry_blackout(now_utc)
+        if rollover_blackout_active:
+            session_name = "VEDA_PRE_ROLLOVER_Y_CAMBIO_DE_DIA"
+        elif 13 <= utc_hour < 17:
+            session_name = "LONDRES_NY_OVERLAP"
+        elif 7 <= utc_hour < 13:
+            session_name = "LONDRES"
+        elif 17 <= utc_hour < 21:
+            session_name = "NUEVA_YORK"
+        elif 0 <= utc_hour < 7:
+            session_name = "ASIA_PACIFICO"
+        else:
+            session_name = "TRANSICION_BAJA_LIQUIDEZ"
+
+        elevated_spreads = [
+            s.symbol
+            for s in snapshots
+            if (s.spread_points / max(1, MAX_ALLOWED_SPREAD_POINTS.get(s.symbol, 30))) >= 0.75
+        ]
+        is_ny_open = (14 * 60 + 15) <= mins_of_day <= (15 * 60 + 15)
+        is_london_fix = (16 * 60 + 15) <= mins_of_day <= (17 * 60 + 0)
+        news_volatility_alert = (len(elevated_spreads) >= 3) or is_ny_open or is_london_fix
+
+        overview = [
+            {
+                "symbol": s.symbol,
+                "htf_trend": s.htf_trend,
+                "above_ema_200": s.above_ema_200,
+                "dist_atr": s.dist_to_ema200_atr,
+                "adx_14": s.adx_14,
+                "rsi_14": s.rsi_14,
+                "stoch_k": s.stoch_k,
+                "macd_improving": s.macd_improving,
+                "candle_pattern": s.candle_pattern,
+                "setup": s.strategy_setup,
+                "spread": s.spread_points,
+            }
+            for s in snapshots
+        ]
+
+        return {
+            "usd_strength": {
+                "usd_bias": usd_bias,
+                "usd_bullish_pairs": usd_bullish,
+                "usd_bearish_pairs": usd_bearish,
+            },
+            "crypto_pulse": {
+                "crypto_regime": crypto_regime,
+                "btc_htf": btc.htf_trend if btc else "N/A",
+                "btc_rsi": btc.rsi_14 if btc else 0.0,
+                "eth_htf": eth.htf_trend if eth else "N/A",
+                "eth_rsi": eth.rsi_14 if eth else 0.0,
+            },
+            "indices_pulse": {
+                "indices_regime": indices_regime,
+                "gold_htf": gold.htf_trend if gold else "N/A",
+                "gold_rsi": gold.rsi_14 if gold else 0.0,
+            },
+            "news_and_session": {
+                "utc_time": now_utc.strftime("%H:%M UTC"),
+                "session_name": session_name,
+                "rollover_blackout_active": rollover_blackout_active,
+                "news_volatility_alert": news_volatility_alert,
+                "elevated_spread_symbols": elevated_spreads,
+            },
+            "daily_risk_guard": daily_risk_guard
+            or {
+                "utc_date": now_utc.strftime("%Y-%m-%d"),
+                "daily_closed_pnl_usd": 0.0,
+                "closed_trades_today": 0,
+                "wins_today": 0,
+                "losses_today": 0,
+                "consecutive_losses": 0,
+                "mins_since_last_loss": 999.0,
+                "hard_daily_loss_stop": False,
+                "protection_mode": "NORMAL",
+                "protection_active": False,
+                "pause_new_entries": False,
+                "pause_remaining_mins": 0.0,
+                "min_ai_prob": 60,
+                "risk_scale": 1.0,
+                "max_positions": 4,
+                "reason": "Operacion normal (sin disparadores diarios)",
+            },
+            "all_assets_overview": overview,
+        }
+
+    def _passes_deterministic_shields(
+        self,
+        cand: MT5SymbolSnapshot,
+        side: str,
+        now_utc: datetime,
+        open_symbols: set[str],
+        usd_dir_counts: dict[str, int],
+        usd_bias: str,
+        equity: float,
+        free_margin: float,
+        risk_scale: float,
+    ) -> tuple[bool, str]:
+        """
+        Evalua TODOS los escudos deterministas ANTES de consultar a Gemini AI o ejecutar ESCUDO 5 (BUG-06).
+        """
+        if cand.margin_min_lot_usd > free_margin * 0.78:
+            return False, f"MARGEN_INSUFICIENTE ({cand.margin_min_lot_usd:.2f} > {free_margin * 0.78:.2f})"
+
+        active_block = self.get_active_block(cand.symbol)
+        if active_block is not None:
+            logger.info(
+                "ESCUDO BLOQUEO ACTIVO: %s bloqueado %.1f min restantes (Cierre: %s, Prob. IA=%d%%). Motivo: %s",
+                cand.symbol,
+                active_block["remaining_minutes"],
+                active_block["close_type"],
+                active_block["probability_pct"],
+                active_block["reason"],
+            )
+            return False, "ACTIVE_BLOCK"
+
+        is_traditional = cand.symbol not in CRYPTO_SYMBOLS
+        now_utc_minutes = now_utc.hour * 60 + now_utc.minute
+
+        # Escudo Viernes >= 21:00 UTC (activos tradicionales)
+        if is_traditional and now_utc.weekday() == 4 and now_utc.hour >= 21:
+            logger.info("ESCUDO CIERRE VIERNES: Nueva entrada en %s omitida (Viernes >= 21:00 UTC).", cand.symbol)
+            return False, "FRIDAY_CLOSE"
+
+        # Escudo 10 Anti-Rollover 20:30 - 23:15 UTC (activos tradicionales)
+        if is_traditional and self._is_pre_rollover_entry_blackout(now_utc):
+            logger.info("ESCUDO 10 ANTI-ROLLOVER: Entrada en %s pausada (20:30 - 23:15 UTC).", cand.symbol)
+            return False, "PRE_ROLLOVER"
+
+        # Escudo 3 Fin de Semana Cripto
+        if not is_traditional:
+            wd = now_utc.weekday()
+            is_weekend_crypto_block = (wd == 4 and now_utc.hour >= 21) or (wd == 5) or (wd == 6 and now_utc.hour < 22)
+            if is_weekend_crypto_block:
+                logger.info("ESCUDO 3 FIN DE SEMANA CRIPTO: Entrada pausada en %s hasta Domingo 22:00 UTC.", cand.symbol)
+                return False, "CRYPTO_WEEKEND"
+
+        # Escudo 2 Spread cap calibrado
+        max_spread = MAX_ALLOWED_SPREAD_POINTS.get(cand.symbol, 30)
+        if cand.spread_points > max_spread:
+            logger.info(
+                "ESCUDO 2 ANTI-NOTICIAS: Entrada pausada en %s por spread (%d > max %d).",
+                cand.symbol,
+                cand.spread_points,
+                max_spread,
+            )
+            return False, "SPREAD_CAP"
+
+        # Escudo 4 Nocturno 07:00 - 10:59 UTC (EURGBPm / NZDUSDm / AUDUSDm; libera Asia 02-06 UTC)
+        if (7 <= now_utc.hour < 11) and cand.symbol in ("EURGBPm", "NZDUSDm", "AUDUSDm"):
+            logger.info("ESCUDO 4 NOCTURNO (07:00-10:59 UTC): Entrada en %s pausada.", cand.symbol)
+            return False, "NOCTURNAL_07_11"
+
+        # Escudo 7 Apertura NY 14:25 - 14:55 UTC (08:25 - 08:55 CST, choque de campana Wall Street)
+        if is_traditional and (14 * 60 + 25) <= now_utc_minutes <= (14 * 60 + 55):
+            logger.info("ESCUDO 7 APERTURA NY (14:25-14:55 UTC): Entrada en %s pausada.", cand.symbol)
+            return False, "NY_OPEN_1425_1455"
+
+        # Escudo 8 London Fix 16:20 - 16:45 UTC (10:20 - 10:45 CST, rebalanceo EUR/GBP)
+        if (16 * 60 + 20) <= now_utc_minutes <= (16 * 60 + 45) and cand.symbol in ("EURUSDm", "GBPUSDm", "EURJPYm", "EURGBPm"):
+            logger.info("ESCUDO 8 LONDON FIX (16:20-16:45 UTC): Entrada en %s pausada.", cand.symbol)
+            return False, "LONDON_FIX"
+
+        # Block FX contra USD_STRONG
+        cand_usd_dir = self._get_usd_direction(cand.symbol, side)
+        if cand.symbol in FOREX_SYMBOLS:
+            if (cand_usd_dir == "USD_LONG" and usd_bias == "USD_STRONG_BEARISH") or (
+                cand_usd_dir == "USD_SHORT" and usd_bias == "USD_STRONG_BULLISH"
+            ):
+                logger.info(
+                    "ESCUDO MACRO USD_STRONG: Entrada FX %s (%s -> %s) bloqueada contra %s.",
+                    cand.symbol,
+                    side,
+                    cand_usd_dir,
+                    usd_bias,
+                )
+                return False, "FX_VS_USD_STRONG"
+
+        # Twin Cluster Cap max 1
+        if self._is_twin_conflict(cand.symbol, open_symbols):
+            logger.info("ESCUDO GEMELOS: Entrada en %s omitida porque su par gemelo ya esta abierto.", cand.symbol)
+            return False, "TWIN_CLUSTER"
+
+        # Correlacion USD max 2 (incluyendo XAUUSDm)
+        if cand_usd_dir in usd_dir_counts and usd_dir_counts[cand_usd_dir] >= 2:
+            logger.info(
+                "ESCUDO CORRELACION USD: Entrada en %s (%s -> %s) omitida (%d >= 2 activas).",
+                cand.symbol,
+                side,
+                cand_usd_dir,
+                usd_dir_counts[cand_usd_dir],
+            )
+            return False, "USD_CORRELATION"
+
+        # Pre-validacion calculate_safe_lot_and_sl (veto SL >20% + Spread/SL <= 12% M15 / <= 18% H1)
+        pre_lot, pre_sl, _, _ = self.calculate_safe_lot_and_sl(
+            snap=cand,
+            side=side,
+            equity_usd=equity,
+            free_margin_usd=free_margin,
+            ai_probability_pct=70,
+            risk_scale=risk_scale,
+        )
+        if pre_lot <= 0.0 or pre_sl <= 0.0:
+            return False, "SL_COMPRESSION_OR_SIZING_VETO"
+
+        entry_px = cand.ask if side == "BUY" else cand.bid
+        sl_dist = abs(entry_px - pre_sl)
+        spread_px = cand.spread_points * cand.point if cand.point > 0 else max(0.0, cand.ask - cand.bid)
+        max_sp_ratio = 0.12 if cand.entry_pillar.startswith("M15_SCALPER") else 0.18
+        if sl_dist <= 0.0 or spread_px > max_sp_ratio * sl_dist:
+            logger.info(
+                "FILTRO SPREAD/SL: Entrada en %s omitida (spread=%.5f > %.0f%% de SL=%.5f).",
+                cand.symbol,
+                spread_px,
+                max_sp_ratio * 100.0,
+                sl_dist,
+            )
+            return False, "SPREAD_SL_RATIO"
+
+        return True, "OK"
 
     def run_cycle(self, cycle_num: int = 1) -> dict[str, Any]:
         term, acc = self.ensure_connected()
@@ -867,6 +1991,12 @@ class ExnessMT5AutonomousBot:
 
         raw_positions = mt5.positions_get() or ()
         open_symbols = {str(p.symbol) for p in raw_positions}
+        open_pos_ids = {
+            int(getattr(p, "ticket", 0) or 0) for p in raw_positions
+        } | {
+            int(getattr(p, "identifier", 0) or 0) for p in raw_positions
+        }
+        open_pos_ids.discard(0)
 
         logger.info(
             "=== Ciclo MT5 #%d | Cuenta Exness %s (%s) | Balance: $%.2f USD | Equity: $%.2f USD | Margen Libre: $%.2f USD ===",
@@ -878,10 +2008,277 @@ class ExnessMT5AutonomousBot:
             free_margin,
         )
 
+        now_utc = datetime.now(timezone.utc)
         snapshots = self.build_snapshots(free_margin_usd=free_margin, open_symbols=open_symbols)
         snapshots_map = {s.symbol: s for s in snapshots}
+        sym_perf_map = self._compute_symbol_performance_14d(now_utc=now_utc, open_position_ids=open_pos_ids)
+        daily_guard = self._evaluate_daily_risk_guard(
+            now_utc=now_utc,
+            equity_usd=equity,
+            open_position_ids=open_pos_ids,
+            known_bot_pos_ids=self.known_bot_pos_ids,
+        )
+        protection_active = daily_guard.get("protection_mode") == "MODO_PROTECCION_CAPITAL"
+        if protection_active:
+            logger.info(
+                "CANDADO DIARIO ACTIVO (%s): PnL UTC $%+.2f | Racha perdidas=%d | Min IA=%d%% | Escala=%.2fx | MaxPos=%d | %s",
+                daily_guard.get("protection_mode"),
+                float(daily_guard.get("daily_closed_pnl_usd", 0.0)),
+                int(daily_guard.get("consecutive_losses", 0)),
+                int(daily_guard.get("min_ai_prob", 68)),
+                float(daily_guard.get("risk_scale", 0.75)),
+                int(daily_guard.get("max_positions", 3)),
+                daily_guard.get("reason", ""),
+            )
+        market_context = self.build_global_market_context(snapshots, daily_guard)
 
-        executed_actions = self.manage_open_positions(snapshots_map)
+        # Recolectar cierres COMPLETOS de los ultimos 90 minutos (excluyendo open_pos_ids)
+        recent_closes = self._collect_recent_closed_deals(
+            snapshots_map=snapshots_map,
+            minutes_back=90,
+            now_utc=now_utc,
+            open_position_ids=open_pos_ids,
+            known_bot_pos_ids=self.known_bot_pos_ids,
+        )
+        latest_close_by_sym: dict[str, dict[str, Any]] = {}
+        for rc in recent_closes:
+            latest_close_by_sym[rc["symbol"]] = rc
+
+        open_positions_data, open_metrics_by_ticket = self._build_open_positions_metrics(raw_positions, snapshots_map)
+        rotatable_positions = self._get_rotatable_stagnant_positions(
+            raw_positions=raw_positions,
+            open_metrics_by_ticket=open_metrics_by_ticket,
+            snapshots_map=snapshots_map,
+        )
+
+        # Capacidad de posiciones simultaneas (concentrado a max 3 entradas de alta conviccion)
+        if equity >= 28.0:
+            effective_max_positions = 3
+        else:
+            effective_max_positions = self.max_open_positions
+        if protection_active:
+            effective_max_positions = min(effective_max_positions, int(daily_guard["max_positions"]))
+
+        # Contar exposicion actual por direccion del Dolar (incluyendo XAUUSDm)
+        usd_dir_counts = {"USD_LONG": 0, "USD_SHORT": 0}
+        for p in raw_positions:
+            p_side = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
+            u_dir = self._get_usd_direction(str(p.symbol), p_side)
+            if u_dir in usd_dir_counts:
+                usd_dir_counts[u_dir] += 1
+
+        # === TODOS LOS ESCUDOS DETERMINISTAS ANTES DE candidates_data / GEMINI / ESCUDO 5 ===
+        usd_bias = str((market_context.get("usd_strength") or {}).get("usd_bias", "USD_MIXED"))
+        risk_scale_now = float(daily_guard.get("risk_scale", 1.0)) if protection_active else 1.0
+        elapsed_since_last_entry = time.time() - self.last_order_timestamp
+        spacing_blocked = self.last_order_timestamp > 0 and elapsed_since_last_entry < 480.0
+
+        eligible_candidates: list[MT5SymbolSnapshot] = []
+        candidates_data: list[dict[str, Any]] = []
+        if daily_guard.get("pause_new_entries"):
+            logger.info(
+                "PAUSA DIARIA ACTIVA: Se omiten nuevas entradas (PnL UTC: $%+.2f | Racha=%d | Restante=%.1fm).",
+                float(daily_guard.get("daily_closed_pnl_usd", 0.0)),
+                int(daily_guard.get("consecutive_losses", 0)),
+                float(daily_guard.get("pause_remaining_mins", 0.0)),
+            )
+        elif spacing_blocked:
+            logger.info(
+                "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 8.0 min requeridos).",
+                elapsed_since_last_entry / 60.0,
+            )
+        elif len(open_symbols) < effective_max_positions or len(rotatable_positions) > 0:
+            pre_candidates = [
+                s for s in snapshots if s.strategy_setup in ("LONG_ENTRY", "SHORT_ENTRY") and s.symbol not in open_symbols
+            ]
+            for cand in pre_candidates:
+                cand_side = "BUY" if cand.strategy_setup == "LONG_ENTRY" else "SELL"
+                ok, _ = self._passes_deterministic_shields(
+                    cand=cand,
+                    side=cand_side,
+                    now_utc=now_utc,
+                    open_symbols=open_symbols,
+                    usd_dir_counts=usd_dir_counts,
+                    usd_bias=usd_bias,
+                    equity=equity,
+                    free_margin=free_margin,
+                    risk_scale=risk_scale_now,
+                )
+                if not ok:
+                    continue
+                eligible_candidates.append(cand)
+                candidates_data.append(
+                    {
+                        "symbol": cand.symbol,
+                        "side": cand_side,
+                        "entry_pillar": cand.entry_pillar,
+                        "snapshot": asdict(cand),
+                        "recent_close": latest_close_by_sym.get(cand.symbol),
+                        "symbol_perf": sym_perf_map.get(cand.symbol),
+                    }
+                )
+
+        # === POLITICA EVENT-DRIVEN IA (0 llamadas API cuando no hay eventos reales) ===
+        new_closes = [rc for rc in recent_closes if rc["ticket"] not in self.evaluated_deal_tickets]
+        has_neg_or_manual_close = any(rc["close_type"] in ("NEGATIVE", "MANUAL") for rc in new_closes)
+
+        if self.last_ai_eval is None:
+            open_set_changed = bool(open_symbols)
+        else:
+            open_set_changed = set(open_symbols) != set(self.last_ai_eval.open_reviews.keys())
+
+        atr_milestone_triggered = False
+        cur_atr_buckets: dict[int, int] = {}
+        cur_sl_danger: dict[int, bool] = {}
+        for p_item in open_positions_data:
+            t_id = int(p_item["ticket"])
+            m_atr = float(p_item.get("move_atr", 0.0))
+            rem_sl = float(p_item.get("rem_sl_in_atr1h", 1.0))
+            p_usd = float(p_item.get("profit_usd", 0.0))
+            bucket = sum(1 for thr in (0.75, 1.25, 1.75, 2.5) if m_atr >= thr)
+            cur_atr_buckets[t_id] = bucket
+            prev_bucket = self._last_ai_atr_milestones.get(t_id, 0)
+            prev_danger = self._last_ai_sl_danger.get(t_id, False)
+
+            if bucket > prev_bucket:
+                atr_milestone_triggered = True
+
+            # Edge-triggered con histeresis y solo en perdida (evita spam HP en BE/Chandelier o M15 con SL ajustado)
+            if p_usd < 0.0 and rem_sl <= 0.45:
+                if not prev_danger:
+                    atr_milestone_triggered = True
+                cur_sl_danger[t_id] = True
+            elif prev_danger and (p_usd >= 0.0 or rem_sl > 0.55):
+                cur_sl_danger[t_id] = False
+            else:
+                cur_sl_danger[t_id] = prev_danger
+
+        self._last_ai_sl_danger = cur_sl_danger
+
+        cur_macro_sig = (
+            usd_bias,
+            str((market_context.get("crypto_pulse") or {}).get("crypto_regime", "")),
+            str((market_context.get("indices_pulse") or {}).get("indices_regime", "")),
+            bool((market_context.get("news_and_session") or {}).get("news_volatility_alert", False)),
+        )
+        macro_regime_changed = (
+            bool(open_positions_data)
+            and (self._last_ai_macro_sig is not None)
+            and (cur_macro_sig != self._last_ai_macro_sig)
+        )
+        heartbeat_triggered = bool(open_positions_data) and (time.time() - self.last_ai_eval_ts) >= 900.0
+
+        trigger_parts: list[str] = []
+        if candidates_data:
+            trigger_parts.append("CANDIDATES")
+        if new_closes:
+            trigger_parts.append("NEW_CLOSES")
+        if open_set_changed:
+            trigger_parts.append("OPEN_SET_CHANGED")
+        if atr_milestone_triggered:
+            trigger_parts.append("ATR_MILESTONE")
+        if macro_regime_changed:
+            trigger_parts.append("MACRO_CHANGE")
+        if heartbeat_triggered:
+            trigger_parts.append("HEARTBEAT_900S")
+
+        should_refresh_ai = bool(trigger_parts)
+        trigger_reason = "+".join(trigger_parts) if trigger_parts else "IDLE"
+        is_high_priority_cycle = bool(
+            candidates_data
+            or has_neg_or_manual_close
+            or open_set_changed
+            or atr_milestone_triggered
+        )
+
+        if should_refresh_ai:
+            closes_for_ai = new_closes if new_closes else []
+            ai_eval = self.ai_agent.evaluate_mt5_market(
+                open_positions_data=open_positions_data,
+                candidates_data=candidates_data,
+                recent_closes_data=closes_for_ai,
+                high_priority=is_high_priority_cycle,
+                market_context=market_context,
+                trigger_reason=trigger_reason,
+            )
+            self.last_ai_eval = ai_eval
+            self.last_ai_eval_ts = time.time()
+            self._last_ai_macro_sig = cur_macro_sig
+            self._last_ai_atr_milestones = cur_atr_buckets
+        elif open_symbols and self.last_ai_eval is not None:
+            ai_eval = self.last_ai_eval
+        else:
+            ai_eval = MT5AICycleEvaluation(
+                market_summary="Sin eventos relevantes en este ciclo (0 llamadas API, event-driven).",
+                open_reviews={},
+                candidate_evals={},
+                closed_evals={},
+                priority_tier="GENERAL",
+                model_used="quant_local",
+            )
+
+        # Procesar cierres recientes completos evaluados por IA (POSITIVE <60% -> 30m; NEGATIVE/MANUAL -> 90m)
+        if new_closes:
+            processed_syms: set[str] = set()
+            for rc in new_closes:
+                self.evaluated_deal_tickets.add(int(rc["ticket"]))
+            for rc in reversed(new_closes):
+                sym = rc["symbol"]
+                if sym in processed_syms:
+                    continue
+                processed_syms.add(sym)
+                ceval = ai_eval.closed_evals.get(sym)
+                if ceval is None:
+                    continue
+                if ceval.reactivate_probability_pct < 60 or ceval.should_block_90m:
+                    base_cooldown_mins = 30.0 if rc["close_type"] == "POSITIVE" else 90.0
+                    remaining_mins = max(1.0, base_cooldown_mins - float(rc["mins_since_close"]))
+                    self.block_symbol_90m(
+                        symbol=sym,
+                        probability_pct=ceval.reactivate_probability_pct,
+                        close_type=rc["close_type"],
+                        profit_usd=float(rc["profit_usd"]),
+                        reason=ceval.reasoning,
+                        duration_minutes=remaining_mins,
+                    )
+                    logger.info(
+                        "EVALUACION IA POST-CIERRE (%s #%d, %s $%+.2f): Probabilidad=%d%% (< 60%%) -> BLOQUEADO %.1f min | %s",
+                        sym,
+                        rc["ticket"],
+                        rc["close_type"],
+                        rc["profit_usd"],
+                        ceval.reactivate_probability_pct,
+                        remaining_mins,
+                        ceval.reasoning,
+                    )
+                    decision_status = f"BLOQUEADO {int(base_cooldown_mins)}m"
+                else:
+                    logger.info(
+                        "EVALUACION IA POST-CIERRE (%s #%d, %s $%+.2f): Probabilidad=%d%% (>= 60%%) -> HABILITADO para reactivacion si confirma setup | %s",
+                        sym,
+                        rc["ticket"],
+                        rc["close_type"],
+                        rc["profit_usd"],
+                        ceval.reactivate_probability_pct,
+                        ceval.reasoning,
+                    )
+                    decision_status = "HABILITADO (>=60%)"
+
+                self.recent_ai_close_decisions.append(
+                    {
+                        "evaluated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                        "ticket": rc["ticket"],
+                        "symbol": sym,
+                        "close_type": rc["close_type"],
+                        "profit_usd": rc["profit_usd"],
+                        "probability_pct": ceval.reactivate_probability_pct,
+                        "status": decision_status,
+                        "reason": ceval.reasoning,
+                    }
+                )
+            self._save_ai_state()
+
+        executed_actions = self.manage_open_positions(snapshots_map, open_reviews=ai_eval.open_reviews)
 
         # Refrescar posiciones y margen tras posibles cierres
         raw_positions = mt5.positions_get() or ()
@@ -889,62 +2286,163 @@ class ExnessMT5AutonomousBot:
         acc = mt5.account_info() or acc
         free_margin = float(acc.margin_free)
         equity = float(acc.equity)
+        _, open_metrics_by_ticket = self._build_open_positions_metrics(raw_positions, snapshots_map)
 
-        # Capacidad de posiciones simultaneas segun Fase de capital:
-        # Fase 1 (< $28 USD): 2 posiciones
-        # Fase 2 ($28 - $60 USD): 3 posiciones simultaneas
-        # Fase 3 ($60 - $250 USD): 4 posiciones simultaneas
-        # Fase 5 (>= $250 USD): 5 posiciones simultaneas diversificadas
-        if equity >= 250.0:
-            effective_max_positions = 5
-        elif equity >= 60.0:
-            effective_max_positions = 4
-        elif equity >= 28.0:
-            effective_max_positions = 3
-        else:
-            effective_max_positions = self.max_open_positions
+        # Recalcular exposicion USD actual
+        usd_dir_counts = {"USD_LONG": 0, "USD_SHORT": 0}
+        for p in raw_positions:
+            p_side = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
+            u_dir = self._get_usd_direction(str(p.symbol), p_side)
+            if u_dir in usd_dir_counts:
+                usd_dir_counts[u_dir] += 1
 
-        # Seleccionar candidatos con Pilar Institucional activo (LONG o SHORT)
-        entry_candidates = [
-            s for s in snapshots if s.strategy_setup in ("LONG_ENTRY", "SHORT_ENTRY") and s.symbol not in open_symbols
-        ]
+        # Ordenar SOLO los candidatos elegibles post-escudos por mayor probabilidad IA primero
+        entry_candidates = [c for c in eligible_candidates if c.symbol not in open_symbols]
+        entry_candidates.sort(
+            key=lambda s: (
+                ai_eval.candidate_evals[s.symbol].win_probability_pct
+                if s.symbol in ai_eval.candidate_evals
+                else 0
+            ),
+            reverse=True,
+        )
 
         for cand in entry_candidates:
-            if len(open_symbols) >= effective_max_positions:
+            need_rotation = len(open_symbols) >= effective_max_positions
+            if need_rotation and not rotatable_positions:
                 break
-            if cand.margin_min_lot_usd > free_margin * 0.78:
-                continue
 
-            # === ESCUDO 2: FILTRO DE ENSANCHAMIENTO DE SPREAD (ANTI-NOTICIAS) ===
-            max_spread = MAX_ALLOWED_SPREAD_POINTS.get(cand.symbol, 30)
-            if cand.spread_points > max_spread:
-                logger.info(
-                    "ESCUDO 2 ANTI-NOTICIAS: Entrada pausada en %s por spread ensanchado (%d > max %d). Esperando normalizacion.",
-                    cand.symbol,
-                    cand.spread_points,
-                    max_spread,
-                )
-                continue
-
-            # === ESCUDO 1: FILTRO DE CUMULO TEMPORAL (SPACING DE 8 MINUTOS) ===
+            # Revalidar ESCUDO 1 (8m spacing) por si ya abrimos una orden en este mismo ciclo
             elapsed_since_last_entry = time.time() - self.last_order_timestamp
             if self.last_order_timestamp > 0 and elapsed_since_last_entry < 480.0:
                 logger.info(
-                    "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 8.0 min requeridos) para evitar cumulos por volatilidad.",
+                    "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 8.0 min requeridos).",
                     elapsed_since_last_entry / 60.0,
                 )
                 break
 
             side = "BUY" if cand.strategy_setup == "LONG_ENTRY" else "SELL"
+            cand_usd_dir = self._get_usd_direction(cand.symbol, side)
+            if not need_rotation:
+                if cand.margin_min_lot_usd > free_margin * 0.78:
+                    continue
+                if self._is_twin_conflict(cand.symbol, open_symbols):
+                    continue
+                if cand_usd_dir in usd_dir_counts and usd_dir_counts[cand_usd_dir] >= 2:
+                    continue
+
+            # === ESCUDO 5 FILTRO IA (SOLO SOBRE CANDIDATOS QUE YA PASARON TODOS LOS ESCUDOS DETERMINISTAS) ===
+            cand_eval = ai_eval.candidate_evals.get(cand.symbol)
+            req_prob = cand_eval.required_probability_pct if cand_eval is not None else 58
+            if protection_active:
+                req_prob = max(req_prob, int(daily_guard["min_ai_prob"]))
+            if cand_eval is not None and (cand_eval.win_probability_pct < req_prob or cand_eval.should_block_90m):
+                last_close = latest_close_by_sym.get(cand.symbol)
+                c_type = last_close["close_type"] if last_close else "LOW_PROB_CANDIDATE"
+                c_profit = float(last_close["profit_usd"]) if last_close else 0.0
+                block_mins = 30.0 if (c_type == "LOW_PROB_CANDIDATE" and cand_eval.win_probability_pct >= 55) else 90.0
+                self.block_symbol_90m(
+                    symbol=cand.symbol,
+                    probability_pct=cand_eval.win_probability_pct,
+                    close_type=c_type,
+                    profit_usd=c_profit,
+                    reason=cand_eval.reasoning,
+                    duration_minutes=block_mins,
+                )
+                logger.info(
+                    "ESCUDO 5 FILTRO IA: Entrada en %s rechazada (Prob=%d%% < umbral %d%%) -> BLOQUEADO %.0f min | %s",
+                    cand.symbol,
+                    cand_eval.win_probability_pct,
+                    req_prob,
+                    block_mins,
+                    cand_eval.reasoning,
+                )
+                continue
+
+            cand_prob = cand_eval.win_probability_pct if cand_eval is not None else 70
+            if need_rotation:
+                # Exigir alta conviccion (>= 68%) para rotar una operacion estancada en ganancia
+                if cand_prob < 68:
+                    continue
+                rotated_pos = None
+                for st_pos in rotatable_positions:
+                    st_sym = str(st_pos.symbol)
+                    if st_sym not in open_symbols:
+                        continue
+                    rem_open = open_symbols - {st_sym}
+                    if self._is_twin_conflict(cand.symbol, rem_open):
+                        continue
+                    st_side = "BUY" if st_pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+                    st_u_dir = self._get_usd_direction(st_sym, st_side)
+                    rem_usd_count = usd_dir_counts.get(cand_usd_dir, 0) - (1 if st_u_dir == cand_usd_dir else 0)
+                    if cand_usd_dir in usd_dir_counts and rem_usd_count >= 2:
+                        continue
+                    rotated_pos = st_pos
+                    break
+
+                if rotated_pos is None:
+                    continue
+
+                st_sym = str(rotated_pos.symbol)
+                st_hours = float(open_metrics_by_ticket.get(int(rotated_pos.ticket), {}).get("hours_open", 0.0))
+                closed_evt = self._close_mt5_position(
+                    rotated_pos,
+                    reason=f"ROTACION DE CAPITAL por {cand.symbol} (Prob={cand_prob}%)",
+                )
+                if not closed_evt:
+                    continue
+                logger.info(
+                    "ROTACION DE CAPITAL: Cerrando %s (+$%.2f tras %.1fh estancada) para abrir %s (Prob IA=%d%%).",
+                    st_sym,
+                    float(rotated_pos.profit),
+                    st_hours,
+                    cand.symbol,
+                    cand_prob,
+                )
+                executed_actions.append(closed_evt)
+                open_symbols.discard(st_sym)
+                rotatable_positions = [p for p in rotatable_positions if str(p.symbol) != st_sym]
+                st_side = "BUY" if rotated_pos.type == mt5.POSITION_TYPE_BUY else "SELL"
+                st_u_dir = self._get_usd_direction(st_sym, st_side)
+                if st_u_dir in usd_dir_counts and usd_dir_counts[st_u_dir] > 0:
+                    usd_dir_counts[st_u_dir] -= 1
+                acc_refresh = mt5.account_info()
+                if acc_refresh is not None:
+                    free_margin = float(acc_refresh.margin_free)
+                    equity = float(acc_refresh.equity)
+
+            ai_prob_for_sizing = cand_eval.win_probability_pct if cand_eval is not None else 70
+            risk_scale = float(daily_guard.get("risk_scale", 1.0)) if protection_active else 1.0
             lot, sl_price, tp_price, risk_usd = self.calculate_safe_lot_and_sl(
                 snap=cand,
                 side=side,
                 equity_usd=equity,
                 free_margin_usd=free_margin,
+                ai_probability_pct=ai_prob_for_sizing,
+                risk_scale=risk_scale,
             )
+            if lot <= 0.0 or sl_price <= 0.0:
+                continue
+
+            entry_px = cand.ask if side == "BUY" else cand.bid
+            sl_dist = abs(entry_px - sl_price)
+            spread_px = cand.spread_points * cand.point if cand.point > 0 else max(0.0, cand.ask - cand.bid)
+            max_sp_ratio = 0.12 if cand.entry_pillar.startswith("M15_SCALPER") else 0.18
+            if sl_dist <= 0.0 or spread_px > max_sp_ratio * sl_dist:
+                logger.info(
+                    "FILTRO SPREAD/SL: Entrada en %s omitida (spread=%.5f > %.0f%% de SL=%.5f; ratio=%.1f%%).",
+                    cand.symbol,
+                    spread_px,
+                    max_sp_ratio * 100.0,
+                    sl_dist,
+                    (spread_px / max(sl_dist, 1e-9)) * 100.0,
+                )
+                continue
+
+            ia_tag = f", IA={cand_eval.win_probability_pct}%" if cand_eval is not None else ""
             reason = (
-                f"Pilar {cand.entry_pillar} ({cand.candle_pattern}, Stoch %K={cand.stoch_k}, "
-                f"RSI={cand.rsi_14}, Riesgo ~${risk_usd:.2f} USD)"
+                f"Pilar {cand.entry_pillar} ({cand.candle_pattern}, ADX={cand.adx_14}, Stoch %K={cand.stoch_k}, "
+                f"RSI={cand.rsi_14}{ia_tag}, Riesgo ~${risk_usd:.2f} USD)"
             )
             trade = self._place_mt5_order(
                 snap=cand,
@@ -958,10 +2456,21 @@ class ExnessMT5AutonomousBot:
             if trade:
                 executed_actions.append(trade)
                 open_symbols.add(cand.symbol)
+                if cand_usd_dir in usd_dir_counts:
+                    usd_dir_counts[cand_usd_dir] += 1
                 used_margin = cand.margin_min_lot_usd * (lot / cand.min_lot) if cand.min_lot > 0 else cand.margin_min_lot_usd
                 free_margin = max(0.0, free_margin - used_margin)
 
-        self._write_markdown_report(cycle_num, acc, raw_positions, snapshots, executed_actions)
+        self._write_markdown_report(
+            cycle_num,
+            acc,
+            raw_positions,
+            snapshots,
+            executed_actions,
+            ai_eval=ai_eval,
+            open_metrics_by_ticket=open_metrics_by_ticket,
+            market_context=market_context,
+        )
 
         return {
             "cycle": cycle_num,
@@ -973,7 +2482,63 @@ class ExnessMT5AutonomousBot:
             "open_positions": list(open_symbols),
             "executed_actions": executed_actions,
             "candidates_scanned": len(snapshots),
+            "daily_risk_guard": daily_guard,
+            "ai_priority": ai_eval.priority_tier,
+            "ai_model": ai_eval.model_used,
+            "ai_trigger": trigger_reason,
+            "ai_blocked_symbols": {
+                sym: {
+                    "remaining_minutes": round((float(data["until_ts"]) - time.time()) / 60.0, 1),
+                    "probability_pct": data.get("probability_pct"),
+                    "close_type": data.get("close_type"),
+                }
+                for sym, data in self.symbol_blocked_until.items()
+                if float(data.get("until_ts", 0.0)) > time.time()
+            },
         }
+
+    @staticmethod
+    def _format_macro_pulse_line(market_context: dict[str, Any] | None) -> str:
+        if not market_context:
+            return "- **Pulso Macro 360°:** Sin datos macro disponibles."
+        usd = market_context.get("usd_strength") or {}
+        crypto = market_context.get("crypto_pulse") or {}
+        idx = market_context.get("indices_pulse") or {}
+        ns = market_context.get("news_and_session") or {}
+        alert_str = "ALERTA VOLATILIDAD/NOTICIAS" if ns.get("news_volatility_alert") else "NORMAL"
+        return (
+            f"- **Pulso Macro 360°:** Dolar: `{usd.get('usd_bias', 'N/A')}` (`{usd.get('usd_bullish_pairs', 0)}/{usd.get('usd_bearish_pairs', 0)}`) | "
+            f"Cripto (BTC/ETH): `{crypto.get('crypto_regime', 'N/A')}` | "
+            f"Wall Street: `{idx.get('indices_regime', 'N/A')}` | "
+            f"Sesion/Noticias: `{ns.get('session_name', 'N/A')}` (`{alert_str}`)"
+        )
+
+    @staticmethod
+    def _format_daily_risk_guard_line(market_context: dict[str, Any] | None) -> str:
+        guard = (market_context or {}).get("daily_risk_guard") or {}
+        if not guard:
+            return "- **Candado Diario / Racha:** Sin datos disponibles."
+        mode = str(guard.get("protection_mode", "NORMAL"))
+        pnl = float(guard.get("daily_closed_pnl_usd", 0.0) or 0.0)
+        losses = int(guard.get("consecutive_losses", 0) or 0)
+        mins_loss = float(guard.get("mins_since_last_loss", 999.0) or 999.0)
+        paused = bool(guard.get("pause_new_entries", False))
+        hard_stop = bool(guard.get("hard_daily_loss_stop", False))
+        min_prob = int(guard.get("min_ai_prob", 60) or 60)
+        risk_scale = float(guard.get("risk_scale", 1.0) or 1.0)
+        max_pos = int(guard.get("max_positions", 4) or 4)
+        loss_age = f"{mins_loss:.1f}m" if mins_loss < 999.0 else "N/A"
+        if hard_stop:
+            pause_tag = " | **HARD STOP -3% ACTIVO**"
+        elif paused:
+            pause_tag = f" | **FRENO 45m ACTIVO** (`{float(guard.get('pause_remaining_mins', 0.0) or 0.0):.1f}m` restantes)"
+        else:
+            pause_tag = ""
+        return (
+            f"- **Candado Diario / Racha (`{guard.get('utc_date', 'UTC')}`):** `{mode}` | "
+            f"PnL Cerrado Hoy: `${pnl:+.2f} USD` | Racha Perdidas: `{losses}` (ultima: `{loss_age}`) | "
+            f"Umbral IA: `{min_prob}%` | Escala Riesgo: `{risk_scale:.2f}x` | Max Pos: `{max_pos}`{pause_tag}"
+        )
 
     def _write_markdown_report(
         self,
@@ -982,16 +2547,19 @@ class ExnessMT5AutonomousBot:
         positions: tuple[Any, ...],
         snapshots: list[MT5SymbolSnapshot],
         executed_actions: list[dict[str, Any]],
+        ai_eval: MT5AICycleEvaluation | None = None,
+        open_metrics_by_ticket: dict[int, dict[str, Any]] | None = None,
+        market_context: dict[str, Any] | None = None,
     ) -> None:
         now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         phase_str = (
-            "Fase 5 (> $400 USD) — Cuenta Institucional Pro (Max 5 posiciones, lotaje hasta 0.10, riesgo 1.8%)"
+            "Fase 5 (>= $400 USD) — B_FINAL_HYBRID_ADX (Max 3 posiciones, riesgo proporcional 1.00% / max 1.25%, veto SL >20%)"
             if acc.equity >= 400.0
             else (
-                "Fase 4 ($150 - $400 USD) — Crecimiento Acelerado (Max 4 posiciones)"
-                if acc.equity >= 150.0
+                "Fase 4 ($250 - $400 USD) — Proporcional 1.00% / max 1.25% (Max 3 posiciones)"
+                if acc.equity >= 250.0
                 else (
-                    "Fase 3 ($60 - $150 USD) — Max 4 posiciones simultaneas"
+                    "Fase 3 ($60 - $250 USD) — Max 3 posiciones simultaneas"
                     if acc.equity >= 60.0
                     else (
                         "Fase 2 ($28 - $60 USD) — Max 3 posiciones simultaneas y lotaje escalable"
@@ -1009,6 +2577,12 @@ class ExnessMT5AutonomousBot:
             f"- **Balance:** `${acc.balance:.2f} USD` | **Equity:** `${acc.equity:.2f} USD` | **Margen Libre:** `${acc.margin_free:.2f} USD`",
             f"- **Nivel de Capital:** `{phase_str}`",
             "",
+            "## Lectura de Mercado y Asistencia Gemini AI",
+            f"- **Modo IA del Ciclo:** `{ai_eval.priority_tier if ai_eval else 'GENERAL'}` | **Modelo utilizado:** `{ai_eval.model_used if ai_eval else 'quant_local'}`",
+            self._format_macro_pulse_line(market_context),
+            self._format_daily_risk_guard_line(market_context),
+            f"> {ai_eval.market_summary if ai_eval else 'Evaluacion IA pendiente.'}",
+            "",
             "## Posiciones Abiertas en Exness MT5",
         ]
         if not positions:
@@ -1016,14 +2590,52 @@ class ExnessMT5AutonomousBot:
         else:
             lines.extend(
                 [
-                    "| Ticket | Simbolo | Tipo | Lote | Apertura | Precio Actual | SL Actual | TP Actual | PnL ($ USD) |",
-                    "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
+                    "| Ticket | Simbolo | Tipo | Lote | Apertura | Precio Actual | SL Actual | TP Actual | Meta TP ($ USD) | PnL ($ USD) | Prob. Profit IA | Asistencia IA |",
+                    "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |",
                 ]
             )
             for p in positions:
                 side_str = "BUY (LONG)" if p.type == mt5.POSITION_TYPE_BUY else "SELL (SHORT)"
+                m = (open_metrics_by_ticket or {}).get(int(p.ticket), {})
+                tp_usd_str = f"${float(m.get('tp_profit_usd', 0.0)):+.2f}" if m else "—"
+                rev = ai_eval.open_reviews.get(str(p.symbol)) if ai_eval else None
+                prob_str = f"**{rev.tp_probability_pct}%**" if rev else "—"
+                act_str = f"`{rev.action}` — {rev.reasoning}" if rev else "Vigilancia estandar"
                 lines.append(
-                    f"| `{p.ticket}` | `{p.symbol}` | **{side_str}** | {p.volume} | {p.price_open} | {p.price_current} | **{p.sl}** | **{p.tp}** | **${p.profit:+.2f}** |"
+                    f"| `{p.ticket}` | `{p.symbol}` | **{side_str}** | {p.volume} | {p.price_open} | {p.price_current} | **{p.sl}** | **{p.tp}** | {tp_usd_str} | **${p.profit:+.2f}** | {prob_str} | {act_str} |"
+                )
+
+        lines.extend(
+            [
+                "",
+                "## Evaluaciones IA Post-Cierre y Bloqueos Activos (90 Minutos)",
+            ]
+        )
+        now_ts = time.time()
+        active_blocks = [
+            (sym, {**data, "remaining_minutes": round((float(data["until_ts"]) - now_ts) / 60.0, 1)})
+            for sym, data in self.symbol_blocked_until.items()
+            if float(data.get("until_ts", 0.0)) > now_ts
+        ]
+        if not active_blocks:
+            lines.append("_Ningun simbolo bloqueado por IA en este momento._")
+        else:
+            lines.extend(
+                [
+                    "| Simbolo | Motivo Cierre | Prob. IA | Restante | Expira (UTC) | Diagnostico IA |",
+                    "| :--- | :---: | :---: | :---: | :---: | :--- |",
+                ]
+            )
+            for sym, b in active_blocks:
+                lines.append(
+                    f"| `{sym}` | `{b.get('close_type')}` (`${float(b.get('profit_usd', 0.0)):+.2f}`) | **{b.get('probability_pct')}%** | `{b['remaining_minutes']} min` | `{b.get('until_utc')}` | {b.get('reason')} |"
+                )
+
+        if self.recent_ai_close_decisions:
+            lines.extend(["", "### Ultimas Evaluaciones Post-Cierre (Manual / Positivo / Negativo)"])
+            for dec in reversed(self.recent_ai_close_decisions[-6:]):
+                lines.append(
+                    f"- `{dec['evaluated_at_utc']}` | **{dec['symbol']}** (`#{dec['ticket']}`, `{dec['close_type']}`, `${float(dec['profit_usd']):+.2f}`) -> Prob. IA: **{dec['probability_pct']}%** -> **{dec['status']}** ({dec['reason']})"
                 )
 
         lines.extend(
@@ -1040,7 +2652,7 @@ class ExnessMT5AutonomousBot:
                 f"| `{s.symbol}` | {s.bid} | `{s.spread_points}` | `${s.margin_min_lot_usd:.2f}` | {s.ema_200} | `{s.dist_to_ema200_atr:+.2f}x` | `{s.stoch_k}`/`{s.stoch_d}` | `{s.rsi_14}` | `{s.bb_pct_b}` | `{s.candle_pattern}` | **`{pillar_str}`** |"
             )
 
-        self.report_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._atomic_write_text(self.report_file, "\n".join(lines) + "\n")
 
 
 def main() -> int:
