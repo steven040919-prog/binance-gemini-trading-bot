@@ -97,7 +97,7 @@ Esto crea/actualiza `data/mt5_learning.db` con las estadisticas iniciales (*prio
 Antes de activar dinero real, ejecuta 1 o 2 ciclos en modo simulacion para confirmar conexion IPC con MT5, lectura de simbolos, llamadas a Gemini AI y escritura en `data/mt5_learning.db`:
 
 ```powershell
-.\scripts\run_mt5_vps.ps1 -PythonExe ".\.venv\Scripts\python.exe" -AdaptiveAI -BaseIntervalMinutes 15 -DryRun
+.\scripts\run_mt5_vps.ps1 -PythonExe ".\.venv\Scripts\python.exe" -AdaptiveAI -BaseIntervalMinutes 30 -DryRun
 ```
 
 Presiona `Ctrl+C` cuando confirmes que los ciclos corren sin errores.
@@ -109,12 +109,12 @@ Presiona `Ctrl+C` cuando confirmes que los ciclos corren sin errores.
 ### Ejecucion manual en consola PowerShell
 
 ```powershell
-.\scripts\run_mt5_vps.ps1 -PythonExe ".\.venv\Scripts\python.exe" -AdaptiveAI -BaseIntervalMinutes 15
+.\scripts\run_mt5_vps.ps1 -PythonExe ".\.venv\Scripts\python.exe" -AdaptiveAI -BaseIntervalMinutes 30
 ```
 
 Parametros principales de `scripts/run_mt5_vps.ps1`:
 - `-AdaptiveAI`: activa el motor multi-estrategia + cerebro adaptativo + despertares exactos (*sniper wake*).
-- `-BaseIntervalMinutes 15`: cadencia base de patrullaje (15 o 30 minutos).
+- `-BaseIntervalMinutes 30`: cadencia base recomendada de patrullaje (30 minutos + despertares exactos *sniper* en setups `FORMING`).
 - `-Mt5Path "..."`: ruta alternativa a `terminal64.exe` si no esta en `C:\Program Files\MetaTrader 5\terminal64.exe`.
 - `-DryRun`: modo simulacion.
 - `-MaxLogSizeMB 10 -MaxLogBackups 5`: rotacion automatica de logs.
@@ -132,7 +132,7 @@ Parametros principales de `scripts/run_mt5_vps.ps1`:
    - Programa/script: `powershell.exe`
    - Argumentos:
      ```text
-     -NoProfile -ExecutionPolicy Bypass -File "C:\Bots\Crypto\scripts\run_mt5_vps.ps1" -PythonExe "C:\Bots\Crypto\.venv\Scripts\python.exe" -AdaptiveAI -BaseIntervalMinutes 15
+     -NoProfile -ExecutionPolicy Bypass -File "C:\Bots\Crypto\scripts\run_mt5_vps.ps1" -PythonExe "C:\Bots\Crypto\.venv\Scripts\python.exe" -AdaptiveAI -BaseIntervalMinutes 30
      ```
    - Iniciar en: `C:\Bots\Crypto`
 5. **Pestaña Configuracion:**

@@ -33,6 +33,25 @@ from src.market_scanner import (
     calc_stochastic,
     detect_candle_pattern,
 )
+from src.mt5_adaptive_scheduler import (
+    AdaptiveWakeScheduler,
+    WakePlan,
+    WatchTarget,
+    utc_iso,
+)
+from src.mt5_ai_brain import (
+    AdaptiveCycleDecision,
+    MT5AdaptiveAIBrain,
+    SymbolAdaptiveDecision,
+)
+from src.mt5_backtester import MT5Backtester, export_strategy_priors
+from src.mt5_knowledge_db import MT5KnowledgeDB
+from src.mt5_strategies import (
+    MT5StrategyEngine,
+    RegimeSnapshot,
+    StrategySignal,
+    classify_session,
+)
 
 logger = logging.getLogger("mt5_bot")
 
@@ -170,6 +189,9 @@ class ExnessMT5AutonomousBot:
         report_file: Path = Path("data/mt5_latest_report.md"),
         history_file: Path = Path("data/mt5_trades_history.json"),
         ai_state_file: Path = Path("data/mt5_ai_state.json"),
+        adaptive_ai: bool = False,
+        base_interval_minutes: int = 30,
+        learning_db_path: Path | str = Path("data/mt5_learning.db"),
     ) -> None:
         self.gemini_api_key = gemini_api_key
         self.gemini_model = gemini_model
@@ -182,6 +204,9 @@ class ExnessMT5AutonomousBot:
         self.report_file = report_file
         self.history_file = history_file
         self.ai_state_file = ai_state_file
+        self.adaptive_ai = bool(adaptive_ai)
+        self.base_interval_minutes = max(5, int(base_interval_minutes))
+        self.learning_db_path = Path(learning_db_path) if str(learning_db_path) != ":memory:" else ":memory:"
         self.ai_agent = GeminiTradingAgent(api_key=gemini_api_key, model=gemini_model)
         self.peak_prices: dict[int, float] = {}
         self.peak_timestamps: dict[int, float] = {}
@@ -199,10 +224,86 @@ class ExnessMT5AutonomousBot:
         self._last_ai_atr_milestones: dict[int, int] = {}
         self._last_ai_sl_danger: dict[int, bool] = {}
 
+        # Componentes del motor adaptativo multi-estrategia (solo activos si adaptive_ai=True)
+        self.knowledge_db: MT5KnowledgeDB | None = None
+        self.strategy_engine: MT5StrategyEngine | None = None
+        self.wake_scheduler: AdaptiveWakeScheduler | None = None
+        self.adaptive_brain: MT5AdaptiveAIBrain | None = None
+
         self.report_file.parent.mkdir(parents=True, exist_ok=True)
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
         self.ai_state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_ai_state()
+
+        if self.adaptive_ai:
+            self._init_adaptive_components()
+
+    def _init_adaptive_components(self) -> None:
+        if self.knowledge_db is None:
+            self.knowledge_db = MT5KnowledgeDB(db_path=self.learning_db_path)
+        if self.strategy_engine is None:
+            self.strategy_engine = MT5StrategyEngine()
+        if self.wake_scheduler is None:
+            self.wake_scheduler = AdaptiveWakeScheduler(
+                base_interval_minutes=self.base_interval_minutes,
+            )
+        if self.adaptive_brain is None:
+            self.adaptive_brain = MT5AdaptiveAIBrain(
+                api_key=self.gemini_api_key,
+                model=self.gemini_model,
+            )
+        # Cargar watches activos persistidos en SQLite al iniciar
+        try:
+            db_watches = self.knowledge_db.get_active_watches(include_postponed=True)
+            if db_watches:
+                loaded = self.wake_scheduler.sync_from_db_watches(db_watches)
+                logger.info("AdaptiveAI: %d watches activos restaurados desde %s.", loaded, self.learning_db_path)
+        except Exception as exc:
+            logger.warning("AdaptiveAI: No se pudieron restaurar watches desde DB: %s", exc)
+
+    def seed_historical_priors(
+        self,
+        years: float = 2.0,
+        timeframe_str: str = "H1",
+        only_if_empty: bool = False,
+        force_synthetic: bool = False,
+    ) -> dict[str, Any]:
+        """Ejecuta el estudio historico de 2 anos y siembra strategy_priors en MT5KnowledgeDB."""
+        self._init_adaptive_components()
+        assert self.knowledge_db is not None
+        assert self.strategy_engine is not None
+
+        if only_if_empty:
+            existing = self.knowledge_db.get_strategy_priors()
+            if existing:
+                logger.info(
+                    "AdaptiveAI: strategy_priors ya poblado (%d registros); se omite re-siembra.",
+                    len(existing),
+                )
+                return {"seeded": False, "reason": "already_populated", "priors_count": len(existing)}
+
+        backtester = MT5Backtester(engine=self.strategy_engine)
+        study_result = backtester.run_2yr_study(
+            timeframe_str=timeframe_str,
+            years=years,
+            use_cache=True,
+            force_synthetic=force_synthetic,
+        )
+        exported = export_strategy_priors(study_result)
+        priors_list = exported.get("priors", [])
+        inserted = self.knowledge_db.upsert_strategy_priors(priors_list)
+        logger.info(
+            "AdaptiveAI: Siembra historica completada (%s, %.1f anos, %d priors guardados en DB).",
+            study_result.get("data_source", "UNKNOWN"),
+            years,
+            inserted,
+        )
+        return {
+            "seeded": True,
+            "data_source": study_result.get("data_source", "UNKNOWN"),
+            "priors_count": inserted,
+            "enabled_priors": sum(1 for p in priors_list if p.get("enabled")),
+        }
 
     @staticmethod
     def _atomic_write_text(path: Path, content: str) -> None:
@@ -1983,7 +2084,561 @@ class ExnessMT5AutonomousBot:
 
         return True, "OK"
 
-    def run_cycle(self, cycle_num: int = 1) -> dict[str, Any]:
+    def _process_adaptive_closed_trades(
+        self,
+        new_closes: list[dict[str, Any]],
+        market_context: dict[str, Any],
+        now_utc: datetime,
+    ) -> list[dict[str, Any]]:
+        """Registra cierres recientes en MT5KnowledgeDB con leccion post-mortem generada por IA."""
+        assert self.knowledge_db is not None
+        assert self.adaptive_brain is not None
+        recorded: list[dict[str, Any]] = []
+        current_session = classify_session(now_utc)
+
+        for rc in new_closes:
+            ticket = int(rc["ticket"])
+            pos_id = int(rc.get("position_id") or ticket)
+            sym = str(rc["symbol"])
+            self.evaluated_deal_tickets.add(ticket)
+
+            meta = self.position_meta.get(pos_id) or self.position_meta.get(ticket) or {}
+            strategy_name = str(meta.get("strategy_name") or "LEGACY_H1")
+            regime = str(meta.get("regime") or "ALL")
+            session = str(meta.get("session") or current_session)
+            entry_price = float(meta.get("entry_price") or 0.0)
+            sl_price = meta.get("sl_price")
+            tp_price = meta.get("tp_price")
+            risk_usd = float(meta.get("risk_usd") or 0.0)
+            entry_time = str(meta.get("entry_time") or "")
+            profit_usd = float(rc.get("profit_usd") or 0.0)
+            r_multiple = round(profit_usd / risk_usd, 3) if risk_usd > 0.0 else (1.0 if profit_usd > 0 else (-1.0 if profit_usd < 0 else 0.0))
+
+            outcome_payload = {
+                "ticket": ticket,
+                "position_id": pos_id,
+                "symbol": sym,
+                "direction": str(rc.get("side") or "BUY"),
+                "strategy_name": strategy_name,
+                "regime": regime,
+                "session": session,
+                "entry_time": entry_time,
+                "exit_time": str(rc.get("closed_at_utc") or utc_iso(now_utc) or ""),
+                "entry_price": entry_price,
+                "exit_price": float((rc.get("snapshot") or {}).get("bid") or 0.0),
+                "sl_price": sl_price,
+                "tp_price": tp_price,
+                "profit_usd": profit_usd,
+                "r_multiple": r_multiple,
+                "close_reason": str(rc.get("close_type") or "CLOSED"),
+            }
+
+            try:
+                lesson = self.adaptive_brain.generate_post_mortem_lesson(
+                    trade_outcome=outcome_payload,
+                    market_context=market_context,
+                )
+            except Exception as exc:
+                logger.warning("AdaptiveAI: Error generando leccion post-mortem para %s #%d: %s", sym, ticket, exc)
+                lesson = f"{sym} ({strategy_name}/{regime}) cerro {outcome_payload['close_reason']} (${profit_usd:+.2f}, {r_multiple:+.2f}R)."
+
+            lesson_type = "WIN_PATTERN" if profit_usd > 0 else ("LOSS_AVOIDANCE" if profit_usd < 0 else "BREAKEVEN")
+            row = self.knowledge_db.record_trade_outcome(
+                ticket=ticket,
+                symbol=sym,
+                direction=outcome_payload["direction"],
+                strategy_name=strategy_name,
+                regime=regime,
+                session=session,
+                entry_time=outcome_payload["entry_time"],
+                exit_time=outcome_payload["exit_time"],
+                entry_price=outcome_payload["entry_price"],
+                exit_price=outcome_payload["exit_price"],
+                sl_price=sl_price,
+                tp_price=tp_price,
+                profit_usd=profit_usd,
+                r_multiple=r_multiple,
+                close_reason=outcome_payload["close_reason"],
+                ai_lesson=lesson,
+                lesson_type=lesson_type,
+            )
+            recorded.append(row)
+            logger.info(
+                "AdaptiveAI POST-MORTEM (%s #%d, %s, $%+.2f, %+.2fR): %s",
+                sym,
+                ticket,
+                strategy_name,
+                profit_usd,
+                r_multiple,
+                lesson,
+            )
+
+        if recorded:
+            self._save_ai_state()
+        return recorded
+
+    def run_adaptive_cycle(
+        self,
+        cycle_num: int = 1,
+        cycle_mode: str | None = None,
+        due_symbols: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Ciclo adaptativo multi-estrategia + memoria SQLite + despertares exactos (SNIPER_WATCH / BASE_PATROL).
+        Preserva TODOS los escudos deterministas de riesgo, spread, margen, correlacion y magic number.
+        """
+        self._init_adaptive_components()
+        assert self.knowledge_db is not None
+        assert self.strategy_engine is not None
+        assert self.wake_scheduler is not None
+        assert self.adaptive_brain is not None
+
+        term, acc = self.ensure_connected()
+        balance = float(acc.balance)
+        equity = float(acc.equity)
+        free_margin = float(acc.margin_free)
+
+        raw_positions = mt5.positions_get() or ()
+        open_symbols = {str(p.symbol) for p in raw_positions}
+        open_pos_ids = {
+            int(getattr(p, "ticket", 0) or 0) for p in raw_positions
+        } | {
+            int(getattr(p, "identifier", 0) or 0) for p in raw_positions
+        }
+        open_pos_ids.discard(0)
+
+        now_utc = datetime.now(timezone.utc)
+        current_session = classify_session(now_utc)
+
+        # Podar watches expirados en scheduler y sincronizar estado EXPIRED a SQLite
+        expired_watches = self.wake_scheduler.prune_expired(now_utc=now_utc)
+        for ew in expired_watches:
+            self.knowledge_db.update_watch_status(
+                watch_id=ew.watch_id,
+                status="EXPIRED",
+                outcome_note=ew.outcome_note or "Watch expirado por TTL",
+            )
+
+        due_watches = self.wake_scheduler.get_due_watches(now_utc=now_utc, grace_seconds=30.0)
+        resolved_mode = (cycle_mode or ("SNIPER_WATCH" if due_watches else "BASE_PATROL")).upper()
+        if resolved_mode not in ("BASE_PATROL", "SNIPER_WATCH"):
+            resolved_mode = "BASE_PATROL"
+
+        sniper_symbols: list[str] = []
+        if due_symbols:
+            sniper_symbols.extend(due_symbols)
+        for w in due_watches:
+            if w.symbol not in sniper_symbols:
+                sniper_symbols.append(w.symbol)
+
+        logger.info(
+            "=== Ciclo Adaptativo MT5 #%d [%s] | Cuenta %s (%s) | Balance: $%.2f | Equity: $%.2f | Margen: $%.2f ===",
+            cycle_num,
+            resolved_mode,
+            acc.login,
+            acc.server,
+            balance,
+            equity,
+            free_margin,
+        )
+
+        snapshots = self.build_snapshots(free_margin_usd=free_margin, open_symbols=open_symbols)
+        snapshots_map = {s.symbol: s for s in snapshots}
+        daily_guard = self._evaluate_daily_risk_guard(
+            now_utc=now_utc,
+            equity_usd=equity,
+            open_position_ids=open_pos_ids,
+            known_bot_pos_ids=self.known_bot_pos_ids,
+        )
+        protection_active = daily_guard.get("protection_mode") == "MODO_PROTECCION_CAPITAL"
+        market_context = self.build_global_market_context(snapshots, daily_guard)
+        market_context["session"] = current_session
+        market_context["cycle_mode"] = resolved_mode
+
+        # 1. Procesar cierres recientes y actualizar aprendizaje bayesiano + lecciones
+        recent_closes = self._collect_recent_closed_deals(
+            snapshots_map=snapshots_map,
+            minutes_back=90,
+            now_utc=now_utc,
+            open_position_ids=open_pos_ids,
+            known_bot_pos_ids=self.known_bot_pos_ids,
+        )
+        new_closes = [rc for rc in recent_closes if int(rc["ticket"]) not in self.evaluated_deal_tickets]
+        recorded_outcomes = self._process_adaptive_closed_trades(
+            new_closes=new_closes,
+            market_context=market_context,
+            now_utc=now_utc,
+        )
+
+        # 2. Gestionar posiciones abiertas (Break-Even, Trailing, Chandelier, etc.)
+        open_positions_data, open_metrics_by_ticket = self._build_open_positions_metrics(raw_positions, snapshots_map)
+        executed_actions = self.manage_open_positions(snapshots_map, open_reviews=None)
+
+        # Refrescar posiciones y cuenta tras gestion activa
+        raw_positions = mt5.positions_get() or ()
+        open_symbols = {str(p.symbol) for p in raw_positions}
+        acc = mt5.account_info() or acc
+        free_margin = float(acc.margin_free)
+        equity = float(acc.equity)
+        open_positions_data, open_metrics_by_ticket = self._build_open_positions_metrics(raw_positions, snapshots_map)
+
+        effective_max_positions = 3 if equity >= 28.0 else self.max_open_positions
+        if protection_active:
+            effective_max_positions = min(effective_max_positions, int(daily_guard["max_positions"]))
+
+        usd_dir_counts = {"USD_LONG": 0, "USD_SHORT": 0}
+        for p in raw_positions:
+            p_side = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
+            u_dir = self._get_usd_direction(str(p.symbol), p_side)
+            if u_dir in usd_dir_counts:
+                usd_dir_counts[u_dir] += 1
+
+        # 3. Evaluar universo de simbolos con MT5StrategyEngine
+        if resolved_mode == "SNIPER_WATCH" and sniper_symbols:
+            eval_symbols = [sym for sym in sniper_symbols if sym in snapshots_map]
+        else:
+            eval_symbols = [s.symbol for s in snapshots]
+
+        strategy_signals: list[StrategySignal] = []
+        regime_by_symbol: dict[str, RegimeSnapshot] = {}
+        best_signal_by_symbol: dict[str, StrategySignal] = {}
+        memory_context_by_symbol: dict[str, dict[str, Any]] = {}
+
+        for sym in eval_symbols:
+            snap = snapshots_map.get(sym)
+            if snap is None:
+                continue
+            candles = self._fetch_candles(sym, mt5.TIMEFRAME_H1, count=300)
+            if len(candles) < 60:
+                continue
+            regime_snap, signals = self.strategy_engine.evaluate_symbol(
+                symbol=sym,
+                candles=candles,
+                digits=snap.digits,
+                point=snap.point,
+            )
+            regime_by_symbol[sym] = regime_snap
+            actionable = [sig for sig in signals if sig.setup_stage in ("READY", "FORMING") and sig.direction in ("BUY", "SELL")]
+            best_sig = self.strategy_engine.select_best_signal(actionable) if actionable else self.strategy_engine.select_best_signal(signals)
+            if best_sig is not None:
+                best_signal_by_symbol[sym] = best_sig
+            if actionable:
+                strategy_signals.extend(actionable)
+            elif sym in sniper_symbols and best_sig is not None:
+                strategy_signals.append(best_sig)
+
+            memory_context_by_symbol[sym] = self.knowledge_db.build_ai_memory_context(
+                symbol=sym,
+                regime=regime_snap.regime,
+                session=current_session,
+            )
+
+        active_watches_payload = list(self.wake_scheduler.to_dict().get("active_watches", []))
+
+        # 4. Consultar al cerebro adaptativo MT5AdaptiveAIBrain
+        adaptive_decision = self.adaptive_brain.evaluate_market_cycle(
+            market_context=market_context,
+            strategy_signals=strategy_signals,
+            memory_context=memory_context_by_symbol,
+            active_watches=active_watches_payload,
+            open_positions=open_positions_data,
+            cycle_mode=resolved_mode,
+            now_utc=now_utc,
+            min_wake_minutes=1.0,
+            max_wake_minutes=float(self.base_interval_minutes),
+        )
+
+        # 5. Ejecutar decisiones preservando TODOS los guardrails y actualizando SQLite + Scheduler
+        usd_bias = str((market_context.get("usd_strength") or {}).get("usd_bias", "USD_MIXED"))
+        risk_scale_now = float(daily_guard.get("risk_scale", 1.0)) if protection_active else 1.0
+
+        # Ordenar entradas por mayor confianza primero
+        ordered_decisions = sorted(
+            adaptive_decision.decisions.items(),
+            key=lambda kv: (0 if kv[1].action in ("ENTER_BUY", "ENTER_SELL") else 1, -int(kv[1].confidence_pct)),
+        )
+
+        for sym, dec in ordered_decisions:
+            regime_str = regime_by_symbol[sym].regime if sym in regime_by_symbol else "ALL"
+            best_sig = best_signal_by_symbol.get(sym)
+            setup_stage = best_sig.setup_stage if best_sig is not None else "NONE"
+            snap = snapshots_map.get(sym)
+
+            # Registrar cada decision en decision_journal
+            self.knowledge_db.record_decision(
+                symbol=sym,
+                regime=regime_str,
+                session=current_session,
+                action=dec.action,
+                strategy_name=dec.strategy_name or (best_sig.strategy_name if best_sig else ""),
+                confidence=float(dec.confidence_pct),
+                setup_stage=setup_stage,
+                next_wake_utc=dec.wake_at_utc,
+                reasoning=dec.reasoning,
+                snapshot=asdict(snap) if snap is not None else None,
+                ts_utc=utc_iso(now_utc),
+            )
+
+            if dec.action in ("ENTER_BUY", "ENTER_SELL"):
+                if snap is None or sym in open_symbols:
+                    continue
+                if daily_guard.get("pause_new_entries"):
+                    logger.info("AdaptiveAI: Entrada %s bloqueada por PAUSA DIARIA.", sym)
+                    continue
+                if len(open_symbols) >= effective_max_positions:
+                    logger.info("AdaptiveAI: Entrada %s omitida (max_open_positions=%d alcanzado).", sym, effective_max_positions)
+                    continue
+                elapsed_since_last = time.time() - self.last_order_timestamp
+                if self.last_order_timestamp > 0 and elapsed_since_last < 480.0:
+                    logger.info("AdaptiveAI: Entrada %s bloqueada por ESCUDO 1 de espaciado (%.1fm < 8m).", sym, elapsed_since_last / 60.0)
+                    continue
+
+                req_conf = max(self.min_ai_confidence, int(daily_guard.get("min_ai_prob", self.min_ai_confidence))) if protection_active else self.min_ai_confidence
+                if int(dec.confidence_pct) < req_conf:
+                    logger.info("AdaptiveAI: Entrada %s rechazada por confianza (%d%% < %d%%).", sym, dec.confidence_pct, req_conf)
+                    continue
+
+                side = "BUY" if dec.action == "ENTER_BUY" else "SELL"
+                shields_ok, shield_reason = self._passes_deterministic_shields(
+                    cand=snap,
+                    side=side,
+                    now_utc=now_utc,
+                    open_symbols=open_symbols,
+                    usd_dir_counts=usd_dir_counts,
+                    usd_bias=usd_bias,
+                    equity=equity,
+                    free_margin=free_margin,
+                    risk_scale=risk_scale_now,
+                )
+                if not shields_ok:
+                    logger.info("AdaptiveAI: Entrada %s (%s) bloqueada por escudo determinista: %s", sym, side, shield_reason)
+                    continue
+
+                lot, sl_price, tp_price, risk_usd = self.calculate_safe_lot_and_sl(
+                    snap=snap,
+                    side=side,
+                    equity_usd=equity,
+                    free_margin_usd=free_margin,
+                    ai_probability_pct=int(dec.confidence_pct),
+                    risk_scale=risk_scale_now,
+                )
+                if lot <= 0.0 or sl_price <= 0.0:
+                    continue
+
+                # Aplicar ajuste opcional de TP/SL de la IA solo si mantiene SL seguro y RR >= 1.2
+                entry_px = snap.ask if side == "BUY" else snap.bid
+                if dec.tp_adjustment is not None:
+                    adj_tp = round(float(dec.tp_adjustment), snap.digits)
+                    sl_dist = abs(entry_px - sl_price)
+                    if (side == "BUY" and adj_tp > entry_px + sl_dist * 1.2) or (side == "SELL" and adj_tp < entry_px - sl_dist * 1.2):
+                        tp_price = adj_tp
+
+                strat_label = dec.strategy_name or (best_sig.strategy_name if best_sig else "ADAPTIVE_AI")
+                reason = (
+                    f"AdaptiveAI [{strat_label}/{regime_str}] Conf={dec.confidence_pct}% "
+                    f"(Riesgo ~${risk_usd:.2f} USD) | {dec.reasoning[:120]}"
+                )
+                trade = self._place_mt5_order(
+                    snap=snap,
+                    side=side,
+                    lot=lot,
+                    sl_price=sl_price,
+                    tp_price=tp_price,
+                    reason=reason,
+                    risk_usd=risk_usd,
+                )
+                if trade:
+                    executed_actions.append(trade)
+                    open_symbols.add(sym)
+                    cand_usd_dir = self._get_usd_direction(sym, side)
+                    if cand_usd_dir in usd_dir_counts:
+                        usd_dir_counts[cand_usd_dir] += 1
+                    used_margin = snap.margin_min_lot_usd * (lot / snap.min_lot) if snap.min_lot > 0 else snap.margin_min_lot_usd
+                    free_margin = max(0.0, free_margin - used_margin)
+
+                    # Guardar metadatos de estrategia/regimen/sesion para post-mortem futuro
+                    ticket = int(trade.get("ticket") or 0)
+                    if ticket > 0:
+                        meta = self.position_meta.setdefault(ticket, {})
+                        meta.update(
+                            {
+                                "strategy_name": strat_label,
+                                "regime": regime_str,
+                                "session": current_session,
+                                "entry_price": float(trade.get("price") or entry_px),
+                                "sl_price": sl_price,
+                                "tp_price": tp_price,
+                                "risk_usd": risk_usd,
+                                "entry_time": utc_iso(now_utc),
+                            }
+                        )
+                        self._save_ai_state()
+
+                    # Si habia un watch activo en este simbolo, marcarlo TRIGGERED
+                    if self.wake_scheduler.has_active_watch(sym):
+                        triggered = self.wake_scheduler.confirm_trigger(
+                            sym,
+                            outcome_note=f"Entrada {side} ejecutada ({strat_label})",
+                            now_utc=now_utc,
+                        )
+                        if triggered is not None:
+                            self.knowledge_db.update_watch_status(
+                                watch_id=triggered.watch_id,
+                                status="TRIGGERED",
+                                outcome_note=triggered.outcome_note,
+                            )
+
+            elif dec.action == "WATCH_EXACT":
+                watch = self.wake_scheduler.register_watch(
+                    symbol=sym,
+                    strategy_name=dec.strategy_name or (best_sig.strategy_name if best_sig else "ADAPTIVE_WATCH"),
+                    wake_at_utc=dec.wake_at_utc,
+                    wake_in_minutes=dec.wake_in_minutes,
+                    hypothesis=dec.watch_hypothesis or dec.reasoning,
+                    trigger_condition=dec.trigger_condition,
+                    invalidation_condition=dec.invalidation_condition,
+                    now_utc=now_utc,
+                )
+                self.knowledge_db.upsert_watch(
+                    watch_id=watch.watch_id,
+                    symbol=watch.symbol,
+                    strategy_name=watch.strategy_name,
+                    wake_at_utc=utc_iso(watch.wake_at_utc) or "",
+                    hypothesis=watch.hypothesis,
+                    trigger_condition=watch.trigger_condition,
+                    invalidation_condition=watch.invalidation_condition,
+                    postpone_count=watch.postpone_count,
+                    max_postpones=watch.max_postpones,
+                    status=watch.status,
+                    outcome_note=watch.outcome_note,
+                    created_at_utc=utc_iso(watch.created_at_utc),
+                    updated_at_utc=utc_iso(watch.updated_at_utc),
+                )
+                logger.info(
+                    "AdaptiveAI WATCH_EXACT (%s, %s): despertar exacto a %s | %s",
+                    sym,
+                    watch.strategy_name,
+                    utc_iso(watch.wake_at_utc),
+                    watch.hypothesis[:100],
+                )
+
+            elif dec.action == "POSTPONE_WATCH":
+                updated = self.wake_scheduler.postpone_watch(
+                    symbol=sym,
+                    new_wake_at_utc=dec.wake_at_utc,
+                    wake_in_minutes=dec.wake_in_minutes,
+                    hypothesis=dec.watch_hypothesis or None,
+                    trigger_condition=dec.trigger_condition or None,
+                    invalidation_condition=dec.invalidation_condition or None,
+                    note=dec.reasoning,
+                    now_utc=now_utc,
+                )
+                if updated is not None:
+                    self.knowledge_db.update_watch_status(
+                        watch_id=updated.watch_id,
+                        status=updated.status,
+                        outcome_note=updated.outcome_note,
+                        wake_at_utc=utc_iso(updated.wake_at_utc),
+                        increment_postpone=True,
+                    )
+                    logger.info(
+                        "AdaptiveAI POSTPONE_WATCH (%s): status=%s (%d/%d) -> proximo despertar %s",
+                        sym,
+                        updated.status,
+                        updated.postpone_count,
+                        updated.max_postpones,
+                        utc_iso(updated.wake_at_utc),
+                    )
+
+            elif dec.action == "INVALIDATE_WATCH":
+                inv = self.wake_scheduler.invalidate_watch(
+                    symbol=sym,
+                    reason=dec.reasoning or "Setup invalidado por IA",
+                    now_utc=now_utc,
+                )
+                if inv is not None:
+                    self.knowledge_db.update_watch_status(
+                        watch_id=inv.watch_id,
+                        status="INVALIDATED",
+                        outcome_note=inv.outcome_note,
+                    )
+                lesson_text = (dec.lesson_note or dec.reasoning or "").strip()
+                if lesson_text:
+                    self.knowledge_db.add_lesson(
+                        symbol=sym,
+                        strategy_name=dec.strategy_name or (best_sig.strategy_name if best_sig else "ALL"),
+                        regime=regime_str,
+                        lesson_text=lesson_text,
+                        lesson_type="WATCH_INVALIDATED",
+                    )
+                logger.info("AdaptiveAI INVALIDATE_WATCH (%s): retorno a patrulla base | %s", sym, dec.reasoning[:100])
+
+            else:
+                # HOLD
+                if dec.lesson_note:
+                    self.knowledge_db.add_lesson(
+                        symbol=sym,
+                        strategy_name=dec.strategy_name or "ALL",
+                        regime=regime_str,
+                        lesson_text=dec.lesson_note,
+                        lesson_type="CYCLE_OBSERVATION",
+                    )
+
+        next_plan = self.wake_scheduler.next_wakeup_plan(now_utc=datetime.now(timezone.utc))
+
+        # Construir resumen compatible para el reporte markdown
+        report_ai_eval = MT5AICycleEvaluation(
+            market_summary=adaptive_decision.market_summary,
+            open_reviews={},
+            candidate_evals={},
+            closed_evals={},
+            priority_tier=adaptive_decision.priority_tier,
+            model_used=adaptive_decision.model_used,
+        )
+        self._write_markdown_report(
+            cycle_num,
+            acc,
+            raw_positions,
+            snapshots,
+            executed_actions,
+            ai_eval=report_ai_eval,
+            open_metrics_by_ticket=open_metrics_by_ticket,
+            market_context=market_context,
+        )
+
+        return {
+            "cycle": cycle_num,
+            "adaptive_ai": True,
+            "cycle_mode": resolved_mode,
+            "account": int(acc.login),
+            "server": str(acc.server),
+            "balance_usd": round(balance, 2),
+            "equity_usd": round(equity, 2),
+            "free_margin_usd": round(free_margin, 2),
+            "open_positions": list(open_symbols),
+            "executed_actions": executed_actions,
+            "recorded_outcomes": len(recorded_outcomes),
+            "candidates_scanned": len(eval_symbols),
+            "signals_evaluated": len(strategy_signals),
+            "daily_risk_guard": daily_guard,
+            "ai_priority": adaptive_decision.priority_tier,
+            "ai_model": adaptive_decision.model_used,
+            "adaptive_decisions": {k: v.to_dict() for k, v in adaptive_decision.decisions.items()},
+            "next_wake_plan": next_plan.to_dict(),
+        }
+
+    def run_cycle(
+        self,
+        cycle_num: int = 1,
+        cycle_mode: str | None = None,
+        due_symbols: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if self.adaptive_ai:
+            return self.run_adaptive_cycle(
+                cycle_num=cycle_num,
+                cycle_mode=cycle_mode,
+                due_symbols=due_symbols,
+            )
         term, acc = self.ensure_connected()
         balance = float(acc.balance)
         equity = float(acc.equity)
@@ -2657,9 +3312,13 @@ class ExnessMT5AutonomousBot:
 
 def main() -> int:
     load_dotenv(BASE_DIR / ".env")
-    parser = argparse.ArgumentParser(description="Bot Autonomo Exness MetaTrader 5 (1H EMA200 + Estocastico + Pilares ATR)")
-    parser.add_argument("--loop", action="store_true", help="Ejecutar continuamente cada N segundos mientras la PC este encendida")
-    parser.add_argument("--interval", type=int, default=300, help="Segundos entre cada escaneo en modo continuo (default: 300s = 5 min)")
+    parser = argparse.ArgumentParser(description="Bot Autonomo Exness MetaTrader 5 (1H EMA200 + Estocastico + Pilares ATR + Modo Adaptativo IA)")
+    parser.add_argument("--loop", action="store_true", help="Ejecutar continuamente mientras la PC/VPS este encendida")
+    parser.add_argument("--interval", type=int, default=300, help="Segundos entre cada escaneo en modo clasico (default: 300s = 5 min)")
+    parser.add_argument("--adaptive-ai", action="store_true", help="Activar motor adaptativo multi-estrategia + SQLite + despertares exactos (sniper wake)")
+    parser.add_argument("--base-interval-minutes", type=int, default=30, help="Cadencia base en minutos para patrullaje en modo --adaptive-ai (default: 30)")
+    parser.add_argument("--seed-history", action="store_true", help="Sembrar strategy_priors (estudio historico 2 anos) en SQLite si la tabla esta vacia")
+    parser.add_argument("--learning-db", type=str, default="data/mt5_learning.db", help="Ruta a la base SQLite de aprendizaje (default: data/mt5_learning.db)")
     parser.add_argument("--dry-run", action="store_true", help="Modo simulacion sin enviar ordenes reales")
     args = parser.parse_args()
 
@@ -2677,15 +3336,33 @@ def main() -> int:
         gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         dry_run=args.dry_run,
+        adaptive_ai=args.adaptive_ai,
+        base_interval_minutes=args.base_interval_minutes,
+        learning_db_path=args.learning_db,
     )
+
+    if args.seed_history:
+        try:
+            seed_res = bot.seed_historical_priors(only_if_empty=True)
+            logger.info("Resultado de siembra historica (--seed-history): %s", seed_res)
+        except Exception as seed_exc:
+            logger.exception("Error durante --seed-history: %s", seed_exc)
 
     cycle = 0
     reconnect_wait_seconds = 20
+    next_cycle_mode: str | None = None
+    next_due_symbols: list[str] | None = None
+
     while True:
         cycle += 1
         mt5_online = False
+        summary: dict[str, Any] = {}
         try:
-            summary = bot.run_cycle(cycle_num=cycle)
+            summary = bot.run_cycle(
+                cycle_num=cycle,
+                cycle_mode=next_cycle_mode,
+                due_symbols=next_due_symbols,
+            )
             print(json.dumps(summary, indent=2, ensure_ascii=False))
             mt5_online = True
         except (ConnectionError, RuntimeError, OSError) as conn_exc:
@@ -2704,8 +3381,30 @@ def main() -> int:
 
         if not args.loop:
             break
-        sleep_seconds = max(30, args.interval) if mt5_online else reconnect_wait_seconds
-        time.sleep(sleep_seconds)
+
+        if not mt5_online:
+            next_cycle_mode = None
+            next_due_symbols = None
+            time.sleep(reconnect_wait_seconds)
+            continue
+
+        if args.adaptive_ai and bot.wake_scheduler is not None:
+            plan = summary.get("next_wake_plan") or bot.wake_scheduler.next_wakeup_plan().to_dict()
+            sleep_seconds = max(15.0, float(plan.get("sleep_seconds", args.base_interval_minutes * 60)))
+            next_cycle_mode = str(plan.get("mode", "BASE_PATROL"))
+            next_due_symbols = list(plan.get("due_symbols") or [])
+            logger.info(
+                "AdaptiveWakeScheduler: durmiendo %.1fs hasta %s | proximo modo=%s | simbolos=%s | %s",
+                sleep_seconds,
+                plan.get("wake_at_utc"),
+                next_cycle_mode,
+                next_due_symbols,
+                plan.get("reason", ""),
+            )
+            time.sleep(sleep_seconds)
+        else:
+            sleep_seconds = max(30, args.interval)
+            time.sleep(sleep_seconds)
 
     return 0
 

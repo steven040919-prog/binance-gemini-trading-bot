@@ -9,10 +9,10 @@
     mediante Ctrl+C o archivo centinela (logs/STOP_MT5_BOT).
 
 .EXAMPLE
-    .\scripts\run_mt5_vps.ps1 -AdaptiveAI -BaseIntervalMinutes 15
+    .\scripts\run_mt5_vps.ps1 -AdaptiveAI -BaseIntervalMinutes 30
 
 .EXAMPLE
-    .\scripts\run_mt5_vps.ps1 -AdaptiveAI -DryRun -BaseIntervalMinutes 15
+    .\scripts\run_mt5_vps.ps1 -AdaptiveAI -DryRun -BaseIntervalMinutes 30
 #>
 [CmdletBinding()]
 param(
@@ -20,7 +20,7 @@ param(
     [string]$PythonExe = "python",
     [string]$Mt5Path = "C:\Program Files\MetaTrader 5\terminal64.exe",
     [switch]$AdaptiveAI = $true,
-    [int]$BaseIntervalMinutes = 15,
+    [int]$BaseIntervalMinutes = 30,
     [int]$IntervalSeconds = 300,
     [switch]$SeedHistory,
     [switch]$DryRun,
