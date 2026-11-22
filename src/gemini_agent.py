@@ -151,13 +151,15 @@ def compute_mt5_quant_probability(
     elif (is_buy and dist_atr > 6.0) or ((not is_buy) and dist_atr < -6.0):
         reasons.append(f"extension 1H >6x ATR ({dist_atr:+.1f}x ATR, proteger ganancia)")
 
+    is_m15_cand = (open_pos is None) and str(snap_dict.get("entry_pillar", "")).startswith("M15_SCALPER")
+
     macd_improving = bool(snap_dict.get("macd_improving", False))
     macd_ok = macd_improving if is_buy else (not macd_improving)
     if macd_ok:
         score += 6.0
         reasons.append("MACD a favor")
     else:
-        score -= 8.0
+        score -= 4.0 if is_m15_cand else 8.0
         reasons.append("MACD perdiendo fuerza")
 
     stoch_k = float(snap_dict.get("stoch_k", 50.0) or 50.0)
@@ -169,7 +171,7 @@ def compute_mt5_quant_probability(
     if is_buy:
         if stoch_k >= 75.0 or rsi_14 >= 66.0:
             if not open_in_profit:
-                score -= 18.0
+                score -= 12.0 if is_m15_cand else 18.0
                 reasons.append(f"zona sobrecompra (Stoch={stoch_k:.1f}, RSI={rsi_14:.1f})")
         elif stoch_k <= 35.0 and stoch_up:
             score += 5.0
@@ -177,7 +179,7 @@ def compute_mt5_quant_probability(
     else:
         if stoch_k <= 25.0 or rsi_14 <= 34.0:
             if not open_in_profit:
-                score -= 18.0
+                score -= 12.0 if is_m15_cand else 18.0
                 reasons.append(f"zona sobreventa (Stoch={stoch_k:.1f}, RSI={rsi_14:.1f})")
         elif stoch_k >= 65.0 and stoch_down:
             score += 5.0
@@ -289,10 +291,8 @@ def compute_mt5_quant_probability(
                 reasons.append("divergencia Wall Street")
 
         news_alert = bool((market_context.get("news_and_session") or {}).get("news_volatility_alert", False))
-        if news_alert and open_pos is None:
-            score -= 12.0
-            reasons.append("alerta de noticias/spreads altos")
-        elif news_alert and open_pos is not None:
+        # P1_SAFE_CORE: Sin penalizacion -12.0 por news_alert (ya cubierto por escudos deterministas)
+        if news_alert:
             reasons.append("alerta volatilidad/noticias")
 
         # BUG-13: No aplicar penalizacion duplicada (-6.0) del daily_risk_guard cuando
@@ -1140,7 +1140,7 @@ class GeminiTradingAgent:
                 else ""
             )
             symbol_perf = item.get("symbol_perf")
-            req_prob = _safe_int(symbol_perf.get("min_required_prob_pct", 60), 60) if isinstance(symbol_perf, dict) else 60
+            req_prob = _safe_int(symbol_perf.get("min_required_prob_pct", 55), 55) if isinstance(symbol_perf, dict) else 55
             ai_item = parsed_cands.get(sym.upper())
 
             if ai_item is not None:

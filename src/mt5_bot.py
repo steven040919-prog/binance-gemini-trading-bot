@@ -462,10 +462,10 @@ class ExnessMT5AutonomousBot:
                 c1h_closed[-1]["close"] < c1h_closed[-1]["open"] and c1h_closed[-1]["close"] < c1h_closed[-2]["low"]
             )
 
-            # === PILARES CUANTITATIVOS H1 (B_FINAL_HYBRID_ADX_0.65PCT) ===
-            h1_allowed = (sym not in H1_EXCLUDED_SYMBOLS) and (20.0 <= adx_14 < 35.0)
+            # === PILARES CUANTITATIVOS H1 (P1_SAFE_CORE: ADX 18..42, BB 0.30/0.70, RSI 48/52) ===
+            h1_allowed = (sym not in H1_EXCLUDED_SYMBOLS) and (18.0 <= adx_14 < 42.0)
 
-            # Pilar 1 LONG: Pullback a EMA 200 (sin bypass via EMA 50, abs(dist_atr) <= 4.8 y 20 <= ADX < 35)
+            # Pilar 1 LONG: Pullback a EMA 200 (sin bypass via EMA 50, abs(dist_atr) <= 4.8 y 18 <= ADX < 42)
             p1_long = (
                 h1_allowed
                 and above_ema200
@@ -474,8 +474,8 @@ class ExnessMT5AutonomousBot:
                 and abs(dist_atr) <= 4.8
                 and (-0.5 <= dist_atr <= 3.0)
                 and (stoch_recent_min <= 22.0 and stoch_k <= 42.0 and stoch_turning_up)
-                and rsi_14 <= 44.0
-                and bb_b <= 0.22
+                and rsi_14 <= 48.0
+                and bb_b <= 0.30
                 and macd_improving
                 and has_bullish_trigger
             )
@@ -483,7 +483,7 @@ class ExnessMT5AutonomousBot:
             # Pilar 2 LONG desactivado permanentemente (validado muerto en auditoria)
             p2_long = False
 
-            # Pilar S1 SHORT: Rechazo Bajista en EMA 200 (sin bypass via EMA 50, abs(dist_atr) <= 4.8 y 20 <= ADX < 35)
+            # Pilar S1 SHORT: Rechazo Bajista en EMA 200 (sin bypass via EMA 50, abs(dist_atr) <= 4.8 y 18 <= ADX < 42)
             s1_short = (
                 h1_allowed
                 and (not above_ema200)
@@ -492,8 +492,8 @@ class ExnessMT5AutonomousBot:
                 and abs(dist_atr) <= 4.8
                 and (-3.0 <= dist_atr <= 0.5)
                 and (stoch_recent_max >= 78.0 and stoch_k >= 58.0 and stoch_turning_down)
-                and rsi_14 >= 56.0
-                and bb_b >= 0.78
+                and rsi_14 >= 52.0
+                and bb_b >= 0.70
                 and macd_weakening
                 and has_bearish_trigger
             )
@@ -1369,6 +1369,7 @@ class ExnessMT5AutonomousBot:
         self,
         now_utc: datetime | None = None,
         open_position_ids: set[int] | None = None,
+        equity_usd: float = 590.0,
     ) -> dict[str, dict[str, Any]]:
         ref_utc = now_utc or datetime.now(timezone.utc)
         if ref_utc.tzinfo is None:
@@ -1419,18 +1420,20 @@ class ExnessMT5AutonomousBot:
                 s["wins"] += 1
             s["net_pnl_usd"] += pnl
 
+        eq_ref = max(1.0, float(equity_usd))
         result: dict[str, dict[str, Any]] = {}
         for sym, s in stats.items():
             trades = int(s["trades"])
             wr = round((s["wins"] / trades) * 100.0, 1) if trades > 0 else 50.0
             net_pnl = round(float(s["net_pnl_usd"]), 2)
-            needs_higher_bar = trades >= 4 and (wr < 50.0 or net_pnl < -3.00)
+            # P1_SAFE_CORE: escalar con equity y exigir bajo WR real (sin castigar pares con WR >= 48%)
+            needs_higher_bar = trades >= 5 and wr < 48.0 and net_pnl < (-0.015 * eq_ref)
             result[sym] = {
                 "trades": trades,
                 "wins": int(s["wins"]),
                 "win_rate_pct": wr,
                 "net_pnl_usd": net_pnl,
-                "min_required_prob_pct": 65 if needs_higher_bar else 58,
+                "min_required_prob_pct": 60 if needs_higher_bar else 55,
             }
         return result
 
@@ -1532,7 +1535,7 @@ class ExnessMT5AutonomousBot:
 
         if protection_triggered:
             protection_mode = "MODO_PROTECCION_CAPITAL"
-            min_ai_prob = 68
+            min_ai_prob = 62
             risk_scale = 0.75
             max_positions = 3
             triggers: list[str] = []
@@ -1547,7 +1550,7 @@ class ExnessMT5AutonomousBot:
             reason = " | ".join(triggers)
         else:
             protection_mode = "NORMAL"
-            min_ai_prob = 60
+            min_ai_prob = 55
             risk_scale = 1.0
             max_positions = 4
             reason = "Operacion normal (sin disparadores diarios)"
@@ -1756,37 +1759,11 @@ class ExnessMT5AutonomousBot:
         snapshots_map: dict[str, MT5SymbolSnapshot],
     ) -> list[Any]:
         """
-        Regla de Rotacion de Capital (Max 3 posiciones):
-        Evalua posiciones abiertas que llevan >= 2.5 horas abiertas, tienen ganancia positiva modesta
-        ($0.40 <= profit < $4.50) con avance < 35% hacia TP y muestran perdida de impulso futuro,
-        para poder cobrarlas y dar paso a una oportunidad fresca de mayor probabilidad (>= 68%).
+        Regla de Rotacion de Capital DESACTIVADA (P1_SAFE_CORE):
+        Auditada con EV negativo (-33.60R en 67 casos historicos por bug de 'WATCH' en momentum_fading).
+        Dejar correr las posiciones bajo CLEAN_DIFF (BE + Chandelier + TP 2.5R).
         """
-        rotatable: list[tuple[float, Any]] = []
-        for p in raw_positions:
-            ticket = int(p.ticket)
-            profit = float(p.profit)
-            if profit < 0.40 or profit >= 4.50:
-                continue
-            m = open_metrics_by_ticket.get(ticket, {})
-            hours_open = float(m.get("hours_open", 0.0))
-            progress_pct = float(m.get("progress_to_tp_pct", 0.0))
-            if hours_open < 2.5 or progress_pct >= 35.0:
-                continue
-            sym = str(p.symbol)
-            snap = snapshots_map.get(sym)
-            if snap is None:
-                continue
-            is_buy = p.type == mt5.POSITION_TYPE_BUY
-            momentum_fading = (
-                (is_buy and (not snap.macd_improving or snap.rsi_14 < 50.0 or snap.strategy_setup in ("WATCH", "EXIT_LONG", "SHORT_ENTRY")))
-                or ((not is_buy) and (snap.macd_improving or snap.rsi_14 > 50.0 or snap.strategy_setup in ("WATCH", "EXIT_SHORT", "LONG_ENTRY")))
-            )
-            if momentum_fading:
-                score = hours_open * 2.0 - profit
-                rotatable.append((score, p))
-
-        rotatable.sort(key=lambda x: x[0], reverse=True)
-        return [item[1] for item in rotatable]
+        return []
 
     def build_global_market_context(
         self,
@@ -1940,7 +1917,7 @@ class ExnessMT5AutonomousBot:
                 "protection_active": False,
                 "pause_new_entries": False,
                 "pause_remaining_mins": 0.0,
-                "min_ai_prob": 60,
+                "min_ai_prob": 55,
                 "risk_scale": 1.0,
                 "max_positions": 4,
                 "reason": "Operacion normal (sin disparadores diarios)",
@@ -2389,8 +2366,8 @@ class ExnessMT5AutonomousBot:
                     logger.info("AdaptiveAI: Entrada %s omitida (max_open_positions=%d alcanzado).", sym, effective_max_positions)
                     continue
                 elapsed_since_last = time.time() - self.last_order_timestamp
-                if self.last_order_timestamp > 0 and elapsed_since_last < 480.0:
-                    logger.info("AdaptiveAI: Entrada %s bloqueada por ESCUDO 1 de espaciado (%.1fm < 8m).", sym, elapsed_since_last / 60.0)
+                if self.last_order_timestamp > 0 and elapsed_since_last < 120.0:
+                    logger.info("AdaptiveAI: Entrada %s bloqueada por ESCUDO 1 de espaciado (%.1fm < 2.0m).", sym, elapsed_since_last / 60.0)
                     continue
 
                 req_conf = max(self.min_ai_confidence, int(daily_guard.get("min_ai_prob", self.min_ai_confidence))) if protection_active else self.min_ai_confidence
@@ -2666,7 +2643,11 @@ class ExnessMT5AutonomousBot:
         now_utc = datetime.now(timezone.utc)
         snapshots = self.build_snapshots(free_margin_usd=free_margin, open_symbols=open_symbols)
         snapshots_map = {s.symbol: s for s in snapshots}
-        sym_perf_map = self._compute_symbol_performance_14d(now_utc=now_utc, open_position_ids=open_pos_ids)
+        sym_perf_map = self._compute_symbol_performance_14d(
+            now_utc=now_utc,
+            open_position_ids=open_pos_ids,
+            equity_usd=equity,
+        )
         daily_guard = self._evaluate_daily_risk_guard(
             now_utc=now_utc,
             equity_usd=equity,
@@ -2680,7 +2661,7 @@ class ExnessMT5AutonomousBot:
                 daily_guard.get("protection_mode"),
                 float(daily_guard.get("daily_closed_pnl_usd", 0.0)),
                 int(daily_guard.get("consecutive_losses", 0)),
-                int(daily_guard.get("min_ai_prob", 68)),
+                int(daily_guard.get("min_ai_prob", 62)),
                 float(daily_guard.get("risk_scale", 0.75)),
                 int(daily_guard.get("max_positions", 3)),
                 daily_guard.get("reason", ""),
@@ -2700,11 +2681,8 @@ class ExnessMT5AutonomousBot:
             latest_close_by_sym[rc["symbol"]] = rc
 
         open_positions_data, open_metrics_by_ticket = self._build_open_positions_metrics(raw_positions, snapshots_map)
-        rotatable_positions = self._get_rotatable_stagnant_positions(
-            raw_positions=raw_positions,
-            open_metrics_by_ticket=open_metrics_by_ticket,
-            snapshots_map=snapshots_map,
-        )
+        # P1_SAFE_CORE: Regla de Rotacion de Capital desactivada (evita cortar ganadoras por bug 'WATCH')
+        rotatable_positions: list[Any] = []
 
         # Capacidad de posiciones simultaneas (concentrado a max 3 entradas de alta conviccion)
         if equity >= 28.0:
@@ -2726,7 +2704,7 @@ class ExnessMT5AutonomousBot:
         usd_bias = str((market_context.get("usd_strength") or {}).get("usd_bias", "USD_MIXED"))
         risk_scale_now = float(daily_guard.get("risk_scale", 1.0)) if protection_active else 1.0
         elapsed_since_last_entry = time.time() - self.last_order_timestamp
-        spacing_blocked = self.last_order_timestamp > 0 and elapsed_since_last_entry < 480.0
+        spacing_blocked = self.last_order_timestamp > 0 and elapsed_since_last_entry < 120.0
 
         eligible_candidates: list[MT5SymbolSnapshot] = []
         candidates_data: list[dict[str, Any]] = []
@@ -2739,7 +2717,7 @@ class ExnessMT5AutonomousBot:
             )
         elif spacing_blocked:
             logger.info(
-                "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 8.0 min requeridos).",
+                "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 2.0 min requeridos).",
                 elapsed_since_last_entry / 60.0,
             )
         elif len(open_symbols) < effective_max_positions or len(rotatable_positions) > 0:
@@ -2872,7 +2850,7 @@ class ExnessMT5AutonomousBot:
                 model_used="quant_local",
             )
 
-        # Procesar cierres recientes completos evaluados por IA (POSITIVE <60% -> 30m; NEGATIVE/MANUAL -> 90m)
+        # Procesar cierres recientes completos evaluados por IA (P1_SAFE_CORE: POSITIVE -> 0m; NEGATIVE/MANUAL -> 45m)
         if new_closes:
             processed_syms: set[str] = set()
             for rc in new_closes:
@@ -2885,28 +2863,49 @@ class ExnessMT5AutonomousBot:
                 ceval = ai_eval.closed_evals.get(sym)
                 if ceval is None:
                     continue
-                if ceval.reactivate_probability_pct < 60 or ceval.should_block_90m:
-                    base_cooldown_mins = 30.0 if rc["close_type"] == "POSITIVE" else 90.0
-                    remaining_mins = max(1.0, base_cooldown_mins - float(rc["mins_since_close"]))
-                    self.block_symbol_90m(
-                        symbol=sym,
-                        probability_pct=ceval.reactivate_probability_pct,
-                        close_type=rc["close_type"],
-                        profit_usd=float(rc["profit_usd"]),
-                        reason=ceval.reasoning,
-                        duration_minutes=remaining_mins,
-                    )
+                if rc["close_type"] == "POSITIVE":
                     logger.info(
-                        "EVALUACION IA POST-CIERRE (%s #%d, %s $%+.2f): Probabilidad=%d%% (< 60%%) -> BLOQUEADO %.1f min | %s",
+                        "EVALUACION IA POST-CIERRE (%s #%d, POSITIVE $%+.2f): Probabilidad=%d%% -> HABILITADO (0m cooldown post-positivo) | %s",
                         sym,
                         rc["ticket"],
-                        rc["close_type"],
                         rc["profit_usd"],
                         ceval.reactivate_probability_pct,
-                        remaining_mins,
                         ceval.reasoning,
                     )
-                    decision_status = f"BLOQUEADO {int(base_cooldown_mins)}m"
+                    decision_status = "HABILITADO (0m post-positivo)"
+                elif ceval.reactivate_probability_pct < 60 or ceval.should_block_90m:
+                    base_cooldown_mins = 45.0
+                    remaining_mins = base_cooldown_mins - float(rc["mins_since_close"])
+                    if remaining_mins > 0.5:
+                        self.block_symbol_90m(
+                            symbol=sym,
+                            probability_pct=ceval.reactivate_probability_pct,
+                            close_type=rc["close_type"],
+                            profit_usd=float(rc["profit_usd"]),
+                            reason=ceval.reasoning,
+                            duration_minutes=remaining_mins,
+                        )
+                        logger.info(
+                            "EVALUACION IA POST-CIERRE (%s #%d, %s $%+.2f): Probabilidad=%d%% (< 60%%) -> BLOQUEADO %.1f min | %s",
+                            sym,
+                            rc["ticket"],
+                            rc["close_type"],
+                            rc["profit_usd"],
+                            ceval.reactivate_probability_pct,
+                            remaining_mins,
+                            ceval.reasoning,
+                        )
+                        decision_status = f"BLOQUEADO {int(base_cooldown_mins)}m"
+                    else:
+                        logger.info(
+                            "EVALUACION IA POST-CIERRE (%s #%d, %s $%+.2f): Cooldown 45m ya cumplido (%.1fm) -> HABILITADO",
+                            sym,
+                            rc["ticket"],
+                            rc["close_type"],
+                            rc["profit_usd"],
+                            float(rc["mins_since_close"]),
+                        )
+                        decision_status = "HABILITADO (45m cumplidos)"
                 else:
                     logger.info(
                         "EVALUACION IA POST-CIERRE (%s #%d, %s $%+.2f): Probabilidad=%d%% (>= 60%%) -> HABILITADO para reactivacion si confirma setup | %s",
@@ -2967,11 +2966,11 @@ class ExnessMT5AutonomousBot:
             if need_rotation and not rotatable_positions:
                 break
 
-            # Revalidar ESCUDO 1 (8m spacing) por si ya abrimos una orden en este mismo ciclo
+            # Revalidar ESCUDO 1 (2m spacing) por si ya abrimos una orden en este mismo ciclo
             elapsed_since_last_entry = time.time() - self.last_order_timestamp
-            if self.last_order_timestamp > 0 and elapsed_since_last_entry < 480.0:
+            if self.last_order_timestamp > 0 and elapsed_since_last_entry < 120.0:
                 logger.info(
-                    "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 8.0 min requeridos).",
+                    "ESCUDO 1 DE ESPACIADO: Esperando cooldown post-entrada (%.1f min < 2.0 min requeridos).",
                     elapsed_since_last_entry / 60.0,
                 )
                 break
@@ -2988,14 +2987,15 @@ class ExnessMT5AutonomousBot:
 
             # === ESCUDO 5 FILTRO IA (SOLO SOBRE CANDIDATOS QUE YA PASARON TODOS LOS ESCUDOS DETERMINISTAS) ===
             cand_eval = ai_eval.candidate_evals.get(cand.symbol)
-            req_prob = cand_eval.required_probability_pct if cand_eval is not None else 58
+            req_prob = cand_eval.required_probability_pct if cand_eval is not None else 55
             if protection_active:
                 req_prob = max(req_prob, int(daily_guard["min_ai_prob"]))
             if cand_eval is not None and (cand_eval.win_probability_pct < req_prob or cand_eval.should_block_90m):
                 last_close = latest_close_by_sym.get(cand.symbol)
                 c_type = last_close["close_type"] if last_close else "LOW_PROB_CANDIDATE"
                 c_profit = float(last_close["profit_usd"]) if last_close else 0.0
-                block_mins = 30.0 if (c_type == "LOW_PROB_CANDIDATE" and cand_eval.win_probability_pct >= 55) else 90.0
+                # P1_SAFE_CORE: LOW_PROB_CANDIDATE limitado a 20m (nunca 30m/90m); NEGATIVE/MANUAL a 45m
+                block_mins = 20.0 if c_type in ("LOW_PROB_CANDIDATE", "POSITIVE") else 45.0
                 self.block_symbol_90m(
                     symbol=cand.symbol,
                     probability_pct=cand_eval.win_probability_pct,
@@ -3179,7 +3179,7 @@ class ExnessMT5AutonomousBot:
         mins_loss = float(guard.get("mins_since_last_loss", 999.0) or 999.0)
         paused = bool(guard.get("pause_new_entries", False))
         hard_stop = bool(guard.get("hard_daily_loss_stop", False))
-        min_prob = int(guard.get("min_ai_prob", 60) or 60)
+        min_prob = int(guard.get("min_ai_prob", 55) or 55)
         risk_scale = float(guard.get("risk_scale", 1.0) or 1.0)
         max_pos = int(guard.get("max_positions", 4) or 4)
         loss_age = f"{mins_loss:.1f}m" if mins_loss < 999.0 else "N/A"

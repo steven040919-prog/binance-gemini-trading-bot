@@ -1,14 +1,14 @@
 # Reporte Autonomo MetaTrader 5 (Exness) - Estrategia Cuantitativa 1H (LONG & SHORT)
 
-- **Ultima actualizacion:** `2026-11-21 18:49:04 UTC` | **Ciclo:** `#25`
+- **Ultima actualizacion:** `2026-11-22 20:41:28 UTC` | **Ciclo:** `#29`
 - **Cuenta Exness:** `478600800` (`Exness-MT5Real11`) | **Apalancamiento:** `1:200`
 - **Balance:** `$580.68 USD` | **Equity:** `$580.68 USD` | **Margen Libre:** `$580.68 USD`
 - **Nivel de Capital:** `Fase 5 (>= $400 USD) — B_FINAL_HYBRID_ADX (Max 3 posiciones, riesgo proporcional 1.00% / max 1.25%, veto SL >20%)`
 
 ## Lectura de Mercado y Asistencia Gemini AI
 - **Modo IA del Ciclo:** `GENERAL` | **Modelo utilizado:** `quant_local`
-- **Pulso Macro 360°:** Dolar: `USD_STRONG_BULLISH` (`6/1`) | Cripto (BTC/ETH): `CRYPTO_ALIGNED_BEARISH` | Wall Street: `WALL_STREET_BEARISH` | Sesion/Noticias: `NUEVA_YORK` (`ALERTA VOLATILIDAD/NOTICIAS`)
-- **Candado Diario / Racha (`2026-11-21`):** `NORMAL` | PnL Cerrado Hoy: `$+0.00 USD` | Racha Perdidas: `0` (ultima: `N/A`) | Umbral IA: `60%` | Escala Riesgo: `1.00x` | Max Pos: `4`
+- **Pulso Macro 360°:** Dolar: `USD_STRONG_BULLISH` (`6/1`) | Cripto (BTC/ETH): `CRYPTO_ALIGNED_BEARISH` | Wall Street: `WALL_STREET_BEARISH` | Sesion/Noticias: `VEDA_PRE_ROLLOVER_Y_CAMBIO_DE_DIA` (`ALERTA VOLATILIDAD/NOTICIAS`)
+- **Candado Diario / Racha (`2026-11-22`):** `NORMAL` | PnL Cerrado Hoy: `$+0.00 USD` | Racha Perdidas: `0` (ultima: `N/A`) | Umbral IA: `55%` | Escala Riesgo: `1.00x` | Max Pos: `4`
 > Sin eventos relevantes en este ciclo (0 llamadas API, event-driven).
 
 ## Posiciones Abiertas en Exness MT5
@@ -39,6 +39,6 @@ _Ningun simbolo bloqueado por IA en este momento._
 | `EURJPYm` | 173.866 | `100` | `$5.48` | 175.605 | `-6.96x` | `12.28`/`19.42` | `28.08` | `0.022` | `BULLISH_HAMMER` | **`WATCH`** |
 | `US500m` | 6957.93 | `40` | `$4.87` | 7391.88 | `-8.64x` | `11.68`/`11.7` | `21.18` | `-0.158` | `BEARISH_ENGULFING` | **`WATCH`** |
 | `USTECm` | 25250.95 | `112` | `$6.31` | 27315.78 | `-7.93x` | `10.57`/`10.69` | `20.27` | `-0.113` | `BEARISH_ENGULFING` | **`WATCH`** |
-| `BTCUSDm` | 59989.41 | `640` | `$3.00` | 64039.94 | `-4.53x` | `83.16`/`85.28` | `56.28` | `0.796` | `BEARISH_SHOOTING_STAR` | **`WATCH`** |
-| `ETHUSDm` | 1678.84 | `100` | `$0.84` | 1801.99 | `-4.44x` | `81.38`/`83.65` | `55.86` | `0.782` | `BULLISH_HAMMER` | **`WATCH`** |
+| `BTCUSDm` | 60561.96 | `640` | `$3.03` | 63155.07 | `-4.52x` | `68.75`/`73.64` | `55.99` | `0.649` | `BULLISH_HAMMER` | **`WATCH`** |
+| `ETHUSDm` | 1712.59 | `100` | `$0.86` | 1776.13 | `-3.99x` | `78.99`/`81.85` | `61.63` | `0.738` | `NONE` | **`WATCH`** |
 | `XAUUSDm` | 3540.063 | `240` | `$17.70` | 3808.485 | `-9.51x` | `27.59`/`28.29` | `29.27` | `0.108` | `BULLISH_HAMMER` | **`WATCH`** |

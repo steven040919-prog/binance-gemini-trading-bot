@@ -5,10 +5,11 @@ Este archivo resume las decisiones, la arquitectura y las instrucciones acordada
 ---
 
 ## 1. Resumen del Proyecto
-- **Motor activo:** `src/mt5_bot.py` (Bot autónomo para **Exness MetaTrader 5** con estrategia 1H EMA 200 + Estocástico + Pilares ATR y agente de IA Gemini en `src/gemini_agent.py`).
+- **Motor activo:** `src/mt5_bot.py` en **Modo Adaptativo IA (`--adaptive-ai`)** para **Exness MetaTrader 5** (multi-estrategia + aprendizaje en SQLite `data/mt5_learning.db` + agente Gemini en `src/gemini_agent.py` + `src/mt5_ai_brain.py` + `src/mt5_adaptive_scheduler.py`).
+- **Importante:** En el VPS usar **únicamente el modo adaptativo (`--adaptive-ai`)**, NO el modo clásico (`--interval 300`).
 - **Inicio en Windows:** `start_mt5_bot.bat` ejecuta:
   ```bat
-  python src/mt5_bot.py --loop --interval 300
+  python src/mt5_bot.py --loop --adaptive-ai --seed-history
   ```
 - **Dependencias:** `requirements.txt` (`requests`, `PySocks`, `python-dotenv`, `pytest`) + la librería oficial `MetaTrader5`.
 
@@ -57,3 +58,4 @@ Cada vez que se realicen cambios en el código del bot:
 ## 5. Historial de Versiones
 - **v1.0.0 (2026-11-21):** Respaldo inicial completo del bot MT5 Exness + agente Gemini (`3ef6ef4`).
 - **v1.0.1 (2026-11-22):** Agregado `VPS_SETUP_CONTEXT.md` con contexto del proyecto, guía de instalación en VPS y política de respaldos.
+- **v1.0.2 (2026-11-22):** Configurado arranque exclusivo en Modo Adaptativo (`--adaptive-ai --seed-history`) e incluidos los últimos cambios y `tests/test_mt5_adaptive_bot.py`.
