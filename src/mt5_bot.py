@@ -7,7 +7,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -46,16 +46,67 @@ from src.mt5_ai_brain import (
 )
 from src.mt5_backtester import MT5Backtester, export_strategy_priors
 from src.mt5_knowledge_db import MT5KnowledgeDB
+from src.mt5_scalper_profiles import SymbolScalperProfile, get_scalper_profile
 from src.mt5_strategies import (
     MT5StrategyEngine,
     RegimeSnapshot,
     StrategySignal,
+    SupervisedM15ScalperStrategy,
     classify_session,
 )
 
 logger = logging.getLogger("mt5_bot")
 
 MT5_MAGIC_NUMBER = 20261109
+
+STRATEGY_MODE_CLASSIC = "CLASSIC"
+STRATEGY_MODE_ADAPTIVE = "ADAPTIVE"
+STRATEGY_MODE_SUPERVISED_M15 = "SUPERVISED_M15_SCALPER"
+VALID_STRATEGY_MODES = (
+    STRATEGY_MODE_CLASSIC,
+    STRATEGY_MODE_ADAPTIVE,
+    STRATEGY_MODE_SUPERVISED_M15,
+)
+
+
+def is_within_trading_window(
+    now_utc: datetime | None = None,
+    start_hour: int = 8,
+    end_hour: int = 23,
+    tz_offset_hours: int = -6,
+) -> tuple[bool, str]:
+    """
+    Evalua si la hora local (UTC + tz_offset_hours) esta dentro de la ventana permitida
+    para abrir NUEVAS entradas [start_hour:00, end_hour:00).
+
+    Retorna (is_open, status_text) con etiqueta clara para logs y reporte Markdown.
+    Nunca bloquea la gestion de posiciones abiertas (BE / Trailing Stop / SL / TP).
+    """
+    ref_utc = now_utc or datetime.now(timezone.utc)
+    if ref_utc.tzinfo is None:
+        ref_utc = ref_utc.replace(tzinfo=timezone.utc)
+    else:
+        ref_utc = ref_utc.astimezone(timezone.utc)
+
+    local_tz = timezone(timedelta(hours=int(tz_offset_hours)))
+    local_dt = ref_utc.astimezone(local_tz)
+    s_hour = int(start_hour) % 24
+    e_hour = int(end_hour) % 24
+    cur_hour = local_dt.hour
+
+    if s_hour < e_hour:
+        is_open = s_hour <= cur_hour < e_hour
+    elif s_hour > e_hour:
+        is_open = cur_hour >= s_hour or cur_hour < e_hour
+    else:
+        is_open = True
+
+    tz_label = f"UTC{int(tz_offset_hours):+d}"
+    local_hm = local_dt.strftime("%H:%M")
+    window_label = f"{s_hour:02d}:00-{e_hour:02d}:00"
+    if is_open:
+        return True, f"ACTIVA {window_label} (local {local_hm} {tz_label})"
+    return False, f"PAUSADA FUERA DE HORARIO (local {local_hm} {tz_label}; ventana {window_label})"
 
 # Universo de activos de alta liquidez en Exness Standard (sufijo 'm') para contexto macro 360°
 DEFAULT_MT5_SYMBOLS = [
@@ -192,6 +243,12 @@ class ExnessMT5AutonomousBot:
         adaptive_ai: bool = False,
         base_interval_minutes: int = 30,
         learning_db_path: Path | str = Path("data/mt5_learning.db"),
+        strategy_mode: str | None = None,
+        trading_window_start: int | None = None,
+        trading_window_end: int | None = None,
+        local_tz_offset: int | None = None,
+        supervised_max_positions: int | None = None,
+        supervised_entry_cooldown_sec: float | None = None,
     ) -> None:
         self.gemini_api_key = gemini_api_key
         self.gemini_model = gemini_model
@@ -204,7 +261,55 @@ class ExnessMT5AutonomousBot:
         self.report_file = report_file
         self.history_file = history_file
         self.ai_state_file = ai_state_file
-        self.adaptive_ai = bool(adaptive_ai)
+
+        # Resolucion del modo de estrategia (CLASSIC | ADAPTIVE | SUPERVISED_M15_SCALPER)
+        raw_mode = (strategy_mode or "").strip().upper()
+        if not raw_mode:
+            if adaptive_ai:
+                raw_mode = STRATEGY_MODE_ADAPTIVE
+            else:
+                env_mode = os.getenv("MT5_STRATEGY_MODE", "").strip().upper()
+                raw_mode = env_mode if env_mode in VALID_STRATEGY_MODES else STRATEGY_MODE_CLASSIC
+        if raw_mode not in VALID_STRATEGY_MODES:
+            logger.warning("MT5_STRATEGY_MODE invalido '%s'; usando '%s'.", raw_mode, STRATEGY_MODE_CLASSIC)
+            raw_mode = STRATEGY_MODE_CLASSIC
+        self.strategy_mode = raw_mode
+        self.adaptive_ai = bool(adaptive_ai) or (self.strategy_mode == STRATEGY_MODE_ADAPTIVE)
+        if self.strategy_mode == STRATEGY_MODE_SUPERVISED_M15:
+            self.adaptive_ai = False
+
+        # Parametros de ventana horaria y capacidad para modo SUPERVISED_M15_SCALPER
+        self.trading_window_start = (
+            int(trading_window_start)
+            if trading_window_start is not None
+            else int(os.getenv("MT5_TRADING_WINDOW_START", "8"))
+        )
+        self.trading_window_end = (
+            int(trading_window_end)
+            if trading_window_end is not None
+            else int(os.getenv("MT5_TRADING_WINDOW_END", "23"))
+        )
+        self.local_tz_offset = (
+            int(local_tz_offset)
+            if local_tz_offset is not None
+            else int(os.getenv("MT5_LOCAL_TZ_OFFSET", "-6"))
+        )
+        self.supervised_max_positions = max(
+            1,
+            int(supervised_max_positions)
+            if supervised_max_positions is not None
+            else int(os.getenv("MT5_SUPERVISED_MAX_POSITIONS", "6")),
+        )
+        self.supervised_entry_cooldown_sec = max(
+            0.0,
+            float(supervised_entry_cooldown_sec)
+            if supervised_entry_cooldown_sec is not None
+            else float(os.getenv("MT5_SUPERVISED_COOLDOWN_SEC", "60")),
+        )
+        self.supervised_scalper_strategy = SupervisedM15ScalperStrategy()
+        self._last_window_open: bool = True
+        self._last_window_status: str = ""
+
         self.base_interval_minutes = max(5, int(base_interval_minutes))
         self.learning_db_path = Path(learning_db_path) if str(learning_db_path) != ":memory:" else ":memory:"
         self.ai_agent = GeminiTradingAgent(api_key=gemini_api_key, model=gemini_model)
@@ -505,7 +610,11 @@ class ExnessMT5AutonomousBot:
             atr_15_price = 0.0
             c15m = (
                 self._fetch_candles(sym, mt5.TIMEFRAME_M15, 250)
-                if (sym in M15_SCALPER_ALLOWED_SYMBOLS or sym in open_symbols)
+                if (
+                    self.strategy_mode == STRATEGY_MODE_SUPERVISED_M15
+                    or sym in M15_SCALPER_ALLOWED_SYMBOLS
+                    or sym in open_symbols
+                )
                 else []
             )
             if len(c15m) >= 20:
@@ -700,7 +809,10 @@ class ExnessMT5AutonomousBot:
         comment = str(getattr(pos, "comment", "") or "")
         pos_magic = int(getattr(pos, "magic", -1))
         is_bot = (pos_magic == MT5_MAGIC_NUMBER) or comment.startswith("GeminiBot")
-        is_m15 = comment.startswith("GeminiBot_M15")
+        is_supervised_m15 = comment.startswith("GeminiBot_SUPM15") or (
+            self.strategy_mode == STRATEGY_MODE_SUPERVISED_M15 and is_bot
+        )
+        is_m15 = comment.startswith("GeminiBot_M15") or is_supervised_m15
 
         atr_1h = snap.atr_price if (snap and snap.atr_price > 0) else abs(entry * 0.003)
         atr_15 = snap.atr_15_price if (snap and snap.atr_15_price > 0) else (atr_1h * 0.5)
@@ -712,6 +824,7 @@ class ExnessMT5AutonomousBot:
         meta = {
             "is_bot": is_bot,
             "is_m15": is_m15,
+            "is_supervised_m15": is_supervised_m15,
             "init_sl_dist": init_sl_dist,
             "atr1h_at_entry": atr_1h,
             "atr15_at_entry": atr_15,
@@ -719,6 +832,18 @@ class ExnessMT5AutonomousBot:
             "peak_ts": now_ts,
             "trail_start_ts": None,
         }
+        if is_supervised_m15:
+            profile = get_scalper_profile(str(pos.symbol))
+            meta.update(
+                {
+                    "strategy_name": STRATEGY_MODE_SUPERVISED_M15,
+                    "profile_tier": profile.tier,
+                    "be_trigger_atr": profile.be_trigger_atr,
+                    "be_lock_atr": profile.be_lock_atr,
+                    "trailing_lock_pct": profile.trailing_lock_pct,
+                    "risk_multiplier": profile.risk_multiplier,
+                }
+            )
         self.position_meta[ticket] = meta
         if is_bot:
             self.recent_bot_pos_ids[ticket] = now_ts
@@ -791,7 +916,10 @@ class ExnessMT5AutonomousBot:
             if created_meta:
                 state_dirty = True
 
-            is_m15 = bool(meta.get("is_m15", False))
+            is_supervised_m15 = bool(meta.get("is_supervised_m15", False)) or (
+                self.strategy_mode == STRATEGY_MODE_SUPERVISED_M15 and bool(meta.get("is_bot", True))
+            )
+            is_m15 = bool(meta.get("is_m15", False)) or is_supervised_m15
             atr_1h = (
                 snap.atr_price
                 if (snap and snap.atr_price > 0)
@@ -855,7 +983,36 @@ class ExnessMT5AutonomousBot:
             reasons: list[str] = []
             direction = 1.0 if is_buy else -1.0
 
-            if is_m15:
+            if is_supervised_m15:
+                # SUPERVISED_M15_SCALPER: BE +be_lock_atr (~0.35 ATR) y Trailing Stop (68%-80% del pico) por perfil
+                profile = get_scalper_profile(sym)
+                be_trigger_atr = float(meta.get("be_trigger_atr") or profile.be_trigger_atr)
+                be_lock_atr = float(meta.get("be_lock_atr") or profile.be_lock_atr)
+                trailing_lock_pct = float(meta.get("trailing_lock_pct") or profile.trailing_lock_pct)
+                move_atr_15 = move_in_favor / atr_15 if atr_15 > 0 else 0.0
+                peak_move = (peak - entry) if is_buy else (entry - peak)
+                peak_atr_15 = peak_move / atr_15 if atr_15 > 0 else 0.0
+
+                if move_atr_15 >= be_trigger_atr:
+                    be_px = round(entry + direction * (be_lock_atr * atr_15), digits)
+                    be_better = (be_px > candidate_sl) if is_buy else (candidate_sl <= 0 or be_px < candidate_sl)
+                    be_valid = (be_px < cur - min_sl_dist) if is_buy else (be_px > cur + min_sl_dist)
+                    if be_better and be_valid:
+                        candidate_sl = be_px
+                        reasons.append(f"Supervised M15 BE +{be_lock_atr:.2f}ATR")
+
+                if peak_atr_15 >= max(be_trigger_atr, 1.0):
+                    if not meta.get("trail_start_ts"):
+                        meta["trail_start_ts"] = now_ts
+                        self.profit_trail_start_ts[ticket] = now_ts
+                        state_dirty = True
+                    trail_px = round(entry + direction * (peak_move * trailing_lock_pct), digits)
+                    trail_better = (trail_px > candidate_sl) if is_buy else (candidate_sl <= 0 or trail_px < candidate_sl)
+                    trail_valid = (trail_px < cur - min_sl_dist) if is_buy else (trail_px > cur + min_sl_dist)
+                    if trail_better and trail_valid:
+                        candidate_sl = trail_px
+                        reasons.append(f"Supervised M15 Trail {int(round(trailing_lock_pct * 100))}%")
+            elif is_m15:
                 # M15 CLEAN_DIFF: Break-Even +0.05R al alcanzar move_r >= 1.00, SIN trailing
                 if move_r >= 1.00:
                     be_px = round(entry + direction * (0.05 * init_sl_dist), digits)
@@ -1067,6 +1224,7 @@ class ExnessMT5AutonomousBot:
         tp_price: float,
         reason: str,
         risk_usd: float,
+        comment_override: str | None = None,
     ) -> dict[str, Any] | None:
         is_buy = side == "BUY"
         price = snap.ask if is_buy else snap.bid
@@ -1098,6 +1256,7 @@ class ExnessMT5AutonomousBot:
             else:
                 filling = mt5.ORDER_FILLING_RETURN
 
+        order_comment = (comment_override or f"GeminiBot_{snap.entry_pillar[:12]}")[:31]
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": snap.symbol,
@@ -1108,7 +1267,7 @@ class ExnessMT5AutonomousBot:
             "tp": float(tp_price),
             "deviation": 25,
             "magic": MT5_MAGIC_NUMBER,
-            "comment": f"GeminiBot_{snap.entry_pillar[:12]}",
+            "comment": order_comment,
             "type_time": mt5.ORDER_TIME_GTC,
             "type_filling": filling,
         }
@@ -1936,6 +2095,7 @@ class ExnessMT5AutonomousBot:
         equity: float,
         free_margin: float,
         risk_scale: float,
+        max_spread_sl_ratio_override: float | None = None,
     ) -> tuple[bool, str]:
         """
         Evalua TODOS los escudos deterministas ANTES de consultar a Gemini AI o ejecutar ESCUDO 5 (BUG-06).
@@ -2048,7 +2208,10 @@ class ExnessMT5AutonomousBot:
         entry_px = cand.ask if side == "BUY" else cand.bid
         sl_dist = abs(entry_px - pre_sl)
         spread_px = cand.spread_points * cand.point if cand.point > 0 else max(0.0, cand.ask - cand.bid)
-        max_sp_ratio = 0.12 if cand.entry_pillar.startswith("M15_SCALPER") else 0.18
+        if max_spread_sl_ratio_override is not None:
+            max_sp_ratio = float(max_spread_sl_ratio_override)
+        else:
+            max_sp_ratio = 0.12 if cand.entry_pillar.startswith("M15_SCALPER") else 0.18
         if sl_dist <= 0.0 or spread_px > max_sp_ratio * sl_dist:
             logger.info(
                 "FILTRO SPREAD/SL: Entrada en %s omitida (spread=%.5f > %.0f%% de SL=%.5f).",
@@ -2604,12 +2767,362 @@ class ExnessMT5AutonomousBot:
             "next_wake_plan": next_plan.to_dict(),
         }
 
+    def run_supervised_scalper_cycle(
+        self,
+        cycle_num: int = 1,
+        now_utc: datetime | None = None,
+    ) -> dict[str, Any]:
+        """
+        Modo 3: SUPERVISED_M15_SCALPER (basado en M15_SCALPER_PULLBACK con perfiles por simbolo).
+        - Ventana estricta de nuevas entradas (default 08:00-23:00 hora local UTC-6).
+        - Fuera de horario: bloquea el 100% de nuevas entradas pero SIGUE gestionando posiciones
+          abiertas 24/7 (BE +be_lock_atr y Trailing Stop 68%-80% por perfil).
+        - Durante horario supervisado: mayor capacidad concurrente (MT5_SUPERVISED_MAX_POSITIONS),
+          cooldown reducido (0m post-positivo) y sizing/BE/trailing calibrados por simbolo.
+        """
+        term, acc = self.ensure_connected()
+        balance = float(acc.balance)
+        equity = float(acc.equity)
+        free_margin = float(acc.margin_free)
+
+        raw_positions = mt5.positions_get() or ()
+        open_symbols = {str(p.symbol) for p in raw_positions}
+        open_pos_ids = {
+            int(getattr(p, "ticket", 0) or 0) for p in raw_positions
+        } | {
+            int(getattr(p, "identifier", 0) or 0) for p in raw_positions
+        }
+        open_pos_ids.discard(0)
+
+        ref_utc = now_utc or datetime.now(timezone.utc)
+        if ref_utc.tzinfo is None:
+            ref_utc = ref_utc.replace(tzinfo=timezone.utc)
+        else:
+            ref_utc = ref_utc.astimezone(timezone.utc)
+
+        window_open, window_status = is_within_trading_window(
+            now_utc=ref_utc,
+            start_hour=self.trading_window_start,
+            end_hour=self.trading_window_end,
+            tz_offset_hours=self.local_tz_offset,
+        )
+        self._last_window_open = window_open
+        self._last_window_status = window_status
+
+        logger.info(
+            "=== Ciclo MT5 #%d [%s] | Ventana: %s | Cuenta %s (%s) | Balance: $%.2f | Equity: $%.2f | Margen: $%.2f ===",
+            cycle_num,
+            self.strategy_mode,
+            window_status,
+            acc.login,
+            acc.server,
+            balance,
+            equity,
+            free_margin,
+        )
+
+        snapshots = self.build_snapshots(free_margin_usd=free_margin, open_symbols=open_symbols)
+        snapshots_map = {s.symbol: s for s in snapshots}
+        daily_guard = self._evaluate_daily_risk_guard(
+            now_utc=ref_utc,
+            equity_usd=equity,
+            open_position_ids=open_pos_ids,
+            known_bot_pos_ids=self.known_bot_pos_ids,
+        )
+        protection_active = daily_guard.get("protection_mode") == "MODO_PROTECCION_CAPITAL"
+        market_context = self.build_global_market_context(snapshots, daily_guard)
+        market_context["strategy_mode"] = self.strategy_mode
+        market_context["trading_window"] = {
+            "is_open": window_open,
+            "status": window_status,
+            "start_hour": self.trading_window_start,
+            "end_hour": self.trading_window_end,
+            "tz_offset_hours": self.local_tz_offset,
+        }
+
+        # 1. Procesar cierres recientes (0m cooldown post-positivo; 20m post-negativo)
+        recent_closes = self._collect_recent_closed_deals(
+            snapshots_map=snapshots_map,
+            minutes_back=60,
+            now_utc=ref_utc,
+            open_position_ids=open_pos_ids,
+            known_bot_pos_ids=self.known_bot_pos_ids,
+        )
+        new_closes = [rc for rc in recent_closes if int(rc["ticket"]) not in self.evaluated_deal_tickets]
+        if new_closes:
+            for rc in new_closes:
+                self.evaluated_deal_tickets.add(int(rc["ticket"]))
+                sym = str(rc["symbol"])
+                if rc["close_type"] == "POSITIVE":
+                    self.symbol_blocked_until.pop(sym, None)
+                    logger.info(
+                        "SUPERVISED_M15 POST-CIERRE POSITIVO (%s #%d, $%+.2f): 0m cooldown -> HABILITADO de inmediato.",
+                        sym,
+                        rc["ticket"],
+                        rc["profit_usd"],
+                    )
+                elif rc["close_type"] == "NEGATIVE":
+                    remaining_mins = 20.0 - float(rc["mins_since_close"])
+                    if remaining_mins > 0.5:
+                        self.block_symbol_90m(
+                            symbol=sym,
+                            probability_pct=50,
+                            close_type="NEGATIVE",
+                            profit_usd=float(rc["profit_usd"]),
+                            reason="Cooldown corto supervisado (20m) tras cierre negativo",
+                            duration_minutes=remaining_mins,
+                        )
+            self._save_ai_state()
+
+        # 2. Gestionar SIEMPRE posiciones abiertas 24/7 (BE +0.35 ATR / Trailing 68%-80% por perfil)
+        executed_actions = self.manage_open_positions(snapshots_map, open_reviews=None)
+
+        # Refrescar posiciones y cuenta tras gestion activa
+        raw_positions = mt5.positions_get() or ()
+        open_symbols = {str(p.symbol) for p in raw_positions}
+        acc = mt5.account_info() or acc
+        free_margin = float(acc.margin_free)
+        equity = float(acc.equity)
+        _, open_metrics_by_ticket = self._build_open_positions_metrics(raw_positions, snapshots_map)
+
+        signals_evaluated = 0
+        ready_signals_count = 0
+        blocked_reason: str | None = None
+
+        # 3. Compuerta estricta de ventana horaria para NUEVAS entradas
+        if not window_open:
+            blocked_reason = "OUTSIDE_TRADING_WINDOW"
+            logger.info(
+                "VENTANA HORARIA CERRADA (%s): Nuevas entradas bloqueadas; posiciones abiertas (%d) siguen protegidas 24/7.",
+                window_status,
+                len(raw_positions),
+            )
+            summary_text = (
+                f"Modo SUPERVISED_M15_SCALPER — {window_status}. "
+                f"Nuevas entradas pausadas; {len(raw_positions)} posicion(es) abierta(s) gestionada(s) 24/7."
+            )
+        elif daily_guard.get("pause_new_entries"):
+            blocked_reason = "DAILY_RISK_PAUSE"
+            logger.info(
+                "SUPERVISED_M15 PAUSA DIARIA ACTIVA: Se omiten nuevas entradas (PnL UTC: $%+.2f | Racha=%d).",
+                float(daily_guard.get("daily_closed_pnl_usd", 0.0)),
+                int(daily_guard.get("consecutive_losses", 0)),
+            )
+            summary_text = f"Modo SUPERVISED_M15_SCALPER — {window_status} | Pausa diaria de riesgo activa."
+        else:
+            effective_max_positions = self.supervised_max_positions
+            if protection_active:
+                effective_max_positions = min(
+                    effective_max_positions,
+                    max(3, int(daily_guard.get("max_positions", 3))),
+                )
+
+            usd_dir_counts = {"USD_LONG": 0, "USD_SHORT": 0}
+            for p in raw_positions:
+                p_side = "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL"
+                u_dir = self._get_usd_direction(str(p.symbol), p_side)
+                if u_dir in usd_dir_counts:
+                    usd_dir_counts[u_dir] += 1
+
+            usd_bias = str((market_context.get("usd_strength") or {}).get("usd_bias", "USD_MIXED"))
+            risk_scale_now = float(daily_guard.get("risk_scale", 1.0)) if protection_active else 1.0
+
+            ready_candidates: list[tuple[StrategySignal, MT5SymbolSnapshot, RegimeSnapshot]] = []
+            for snap in snapshots:
+                if snap.symbol in open_symbols:
+                    continue
+                c15m = self._fetch_candles(snap.symbol, mt5.TIMEFRAME_M15, 250)
+                if len(c15m) < 60:
+                    continue
+                signals_evaluated += 1
+                regime_snap, sig = self.supervised_scalper_strategy.evaluate_candles(
+                    symbol=snap.symbol,
+                    candles=c15m[:-1],
+                    digits=snap.digits,
+                    point=snap.point,
+                    spread_points=snap.spread_points,
+                )
+                if sig.setup_stage == "READY" and sig.direction in ("BUY", "SELL"):
+                    ready_candidates.append((sig, snap, regime_snap))
+
+            ready_signals_count = len(ready_candidates)
+            ready_candidates.sort(key=lambda item: float(item[0].score), reverse=True)
+
+            for sig, snap, regime_snap in ready_candidates:
+                if len(open_symbols) >= effective_max_positions:
+                    break
+
+                elapsed_since_last = time.time() - self.last_order_timestamp
+                if (
+                    self.supervised_entry_cooldown_sec > 0
+                    and self.last_order_timestamp > 0
+                    and elapsed_since_last < self.supervised_entry_cooldown_sec
+                ):
+                    logger.info(
+                        "SUPERVISED_M15 COOLDOWN: Esperando %.0fs entre entradas (%.0fs transcurridos).",
+                        self.supervised_entry_cooldown_sec,
+                        elapsed_since_last,
+                    )
+                    break
+
+                profile = get_scalper_profile(snap.symbol)
+                side = sig.direction
+                pillar = str((sig.metadata or {}).get("entry_pillar") or f"M15_SCALPER_PULLBACK_{'LONG' if side == 'BUY' else 'SHORT'}")
+                eval_snap = replace(
+                    snap,
+                    entry_pillar=pillar,
+                    strategy_setup="LONG_ENTRY" if side == "BUY" else "SHORT_ENTRY",
+                    structural_long_sl=sig.sl_price if side == "BUY" else snap.structural_long_sl,
+                    structural_short_sl=sig.sl_price if side == "SELL" else snap.structural_short_sl,
+                )
+
+                applied_risk_scale = risk_scale_now * float(profile.risk_multiplier)
+                shields_ok, shield_reason = self._passes_deterministic_shields(
+                    cand=eval_snap,
+                    side=side,
+                    now_utc=ref_utc,
+                    open_symbols=open_symbols,
+                    usd_dir_counts=usd_dir_counts,
+                    usd_bias=usd_bias,
+                    equity=equity,
+                    free_margin=free_margin,
+                    risk_scale=applied_risk_scale,
+                    max_spread_sl_ratio_override=profile.max_spread_sl_ratio,
+                )
+                if not shields_ok:
+                    logger.info(
+                        "SUPERVISED_M15 ESCUDO (%s %s): omitida por %s",
+                        snap.symbol,
+                        side,
+                        shield_reason,
+                    )
+                    continue
+
+                lot, sl_price, tp_price, risk_usd = self.calculate_safe_lot_and_sl(
+                    snap=eval_snap,
+                    side=side,
+                    equity_usd=equity,
+                    free_margin_usd=free_margin,
+                    ai_probability_pct=int(round(sig.score)),
+                    risk_scale=applied_risk_scale,
+                )
+                if lot <= 0.0 or sl_price <= 0.0:
+                    continue
+
+                entry_px = eval_snap.ask if side == "BUY" else eval_snap.bid
+                sl_dist = abs(entry_px - sl_price)
+                target_rr = max(float(profile.min_rr), float(sig.rr_ratio or profile.min_rr))
+                tp_price = round(
+                    entry_px + sl_dist * target_rr if side == "BUY" else entry_px - sl_dist * target_rr,
+                    eval_snap.digits,
+                )
+
+                reason = (
+                    f"SUPERVISED_M15 [{profile.tier} {profile.risk_multiplier:.2f}x | {regime_snap.regime}] "
+                    f"Score={sig.score:.1f} | BE+{profile.be_lock_atr:.2f}ATR | Trail={int(round(profile.trailing_lock_pct * 100))}% "
+                    f"(Riesgo ~${risk_usd:.2f} USD)"
+                )
+                trade = self._place_mt5_order(
+                    snap=eval_snap,
+                    side=side,
+                    lot=lot,
+                    sl_price=sl_price,
+                    tp_price=tp_price,
+                    reason=reason,
+                    risk_usd=risk_usd,
+                    comment_override=f"GeminiBot_SUPM15_{side}",
+                )
+                if trade:
+                    executed_actions.append(trade)
+                    open_symbols.add(snap.symbol)
+                    cand_usd_dir = self._get_usd_direction(snap.symbol, side)
+                    if cand_usd_dir in usd_dir_counts:
+                        usd_dir_counts[cand_usd_dir] += 1
+                    used_margin = (
+                        snap.margin_min_lot_usd * (lot / snap.min_lot)
+                        if snap.min_lot > 0
+                        else snap.margin_min_lot_usd
+                    )
+                    free_margin = max(0.0, free_margin - used_margin)
+
+                    ticket = int(trade.get("ticket") or 0)
+                    if ticket > 0:
+                        meta = self.position_meta.setdefault(ticket, {})
+                        meta.update(
+                            {
+                                "is_m15": True,
+                                "is_supervised_m15": True,
+                                "strategy_name": self.supervised_scalper_strategy.name,
+                                "profile_tier": profile.tier,
+                                "be_trigger_atr": profile.be_trigger_atr,
+                                "be_lock_atr": profile.be_lock_atr,
+                                "trailing_lock_pct": profile.trailing_lock_pct,
+                                "risk_multiplier": profile.risk_multiplier,
+                                "regime": regime_snap.regime,
+                                "entry_price": float(trade.get("price") or entry_px),
+                                "sl_price": sl_price,
+                                "tp_price": tp_price,
+                                "risk_usd": risk_usd,
+                            }
+                        )
+                        self._save_ai_state()
+
+            summary_text = (
+                f"Modo SUPERVISED_M15_SCALPER — {window_status} | "
+                f"Escaneados: {signals_evaluated} | Setups READY: {ready_signals_count} | "
+                f"Max Pos: {effective_max_positions}"
+            )
+
+        report_ai_eval = MT5AICycleEvaluation(
+            market_summary=summary_text,
+            open_reviews={},
+            candidate_evals={},
+            closed_evals={},
+            priority_tier="SUPERVISED_M15",
+            model_used="supervised_m15_profiles",
+        )
+        self._write_markdown_report(
+            cycle_num,
+            acc,
+            raw_positions,
+            snapshots,
+            executed_actions,
+            ai_eval=report_ai_eval,
+            open_metrics_by_ticket=open_metrics_by_ticket,
+            market_context=market_context,
+        )
+
+        return {
+            "cycle": cycle_num,
+            "strategy_mode": self.strategy_mode,
+            "trading_window_open": window_open,
+            "trading_window_status": window_status,
+            "new_entries_blocked_reason": blocked_reason,
+            "account": int(acc.login),
+            "server": str(acc.server),
+            "balance_usd": round(balance, 2),
+            "equity_usd": round(equity, 2),
+            "free_margin_usd": round(free_margin, 2),
+            "open_positions": list(open_symbols),
+            "executed_actions": executed_actions,
+            "candidates_scanned": len(snapshots),
+            "signals_evaluated": signals_evaluated,
+            "ready_signals": ready_signals_count,
+            "daily_risk_guard": daily_guard,
+        }
+
     def run_cycle(
         self,
         cycle_num: int = 1,
         cycle_mode: str | None = None,
         due_symbols: list[str] | None = None,
+        now_utc: datetime | None = None,
     ) -> dict[str, Any]:
+        if self.strategy_mode == STRATEGY_MODE_SUPERVISED_M15:
+            return self.run_supervised_scalper_cycle(
+                cycle_num=cycle_num,
+                now_utc=now_utc,
+            )
         if self.adaptive_ai:
             return self.run_adaptive_cycle(
                 cycle_num=cycle_num,
@@ -3224,22 +3737,41 @@ class ExnessMT5AutonomousBot:
                 )
             )
         )
+        window_info = (market_context or {}).get("trading_window")
+        if not window_info and self.strategy_mode == STRATEGY_MODE_SUPERVISED_M15:
+            win_open, win_status = is_within_trading_window(
+                start_hour=self.trading_window_start,
+                end_hour=self.trading_window_end,
+                tz_offset_hours=self.local_tz_offset,
+            )
+            window_info = {"is_open": win_open, "status": win_status}
+
         lines = [
             "# Reporte Autonomo MetaTrader 5 (Exness) - Estrategia Cuantitativa 1H (LONG & SHORT)",
             "",
             f"- **Ultima actualizacion:** `{now_str}` | **Ciclo:** `#{cycle_num}`",
-            f"- **Cuenta Exness:** `{acc.login}` (`{acc.server}`) | **Apalancamiento:** `1:{acc.leverage}`",
-            f"- **Balance:** `${acc.balance:.2f} USD` | **Equity:** `${acc.equity:.2f} USD` | **Margen Libre:** `${acc.margin_free:.2f} USD`",
-            f"- **Nivel de Capital:** `{phase_str}`",
-            "",
-            "## Lectura de Mercado y Asistencia Gemini AI",
-            f"- **Modo IA del Ciclo:** `{ai_eval.priority_tier if ai_eval else 'GENERAL'}` | **Modelo utilizado:** `{ai_eval.model_used if ai_eval else 'quant_local'}`",
-            self._format_macro_pulse_line(market_context),
-            self._format_daily_risk_guard_line(market_context),
-            f"> {ai_eval.market_summary if ai_eval else 'Evaluacion IA pendiente.'}",
-            "",
-            "## Posiciones Abiertas en Exness MT5",
+            f"- **Modo de Estrategia:** `{self.strategy_mode}`",
         ]
+        if window_info:
+            lines.append(
+                f"- **Ventana Horaria (Supervisada):** `{window_info.get('status', 'N/A')}` | "
+                f"**Max Posiciones Supervisadas:** `{self.supervised_max_positions}`"
+            )
+        lines.extend(
+            [
+                f"- **Cuenta Exness:** `{acc.login}` (`{acc.server}`) | **Apalancamiento:** `1:{acc.leverage}`",
+                f"- **Balance:** `${acc.balance:.2f} USD` | **Equity:** `${acc.equity:.2f} USD` | **Margen Libre:** `${acc.margin_free:.2f} USD`",
+                f"- **Nivel de Capital:** `{phase_str}`",
+                "",
+                "## Lectura de Mercado y Asistencia Gemini AI",
+                f"- **Modo IA del Ciclo:** `{ai_eval.priority_tier if ai_eval else 'GENERAL'}` | **Modelo utilizado:** `{ai_eval.model_used if ai_eval else 'quant_local'}`",
+                self._format_macro_pulse_line(market_context),
+                self._format_daily_risk_guard_line(market_context),
+                f"> {ai_eval.market_summary if ai_eval else 'Evaluacion IA pendiente.'}",
+                "",
+                "## Posiciones Abiertas en Exness MT5",
+            ]
+        )
         if not positions:
             lines.append("_No hay posiciones abiertas en este momento._")
         else:
@@ -3310,17 +3842,32 @@ class ExnessMT5AutonomousBot:
         self._atomic_write_text(self.report_file, "\n".join(lines) + "\n")
 
 
+MT5Bot = ExnessMT5AutonomousBot
+
+
 def main() -> int:
     load_dotenv(BASE_DIR / ".env")
-    parser = argparse.ArgumentParser(description="Bot Autonomo Exness MetaTrader 5 (1H EMA200 + Estocastico + Pilares ATR + Modo Adaptativo IA)")
+    parser = argparse.ArgumentParser(description="Bot Autonomo Exness MetaTrader 5 (1H EMA200 + Estocastico + Pilares ATR + Modo Adaptativo IA + Supervised M15 Scalper)")
     parser.add_argument("--loop", action="store_true", help="Ejecutar continuamente mientras la PC/VPS este encendida")
-    parser.add_argument("--interval", type=int, default=300, help="Segundos entre cada escaneo en modo clasico (default: 300s = 5 min)")
+    parser.add_argument("--interval", type=int, default=300, help="Segundos entre cada escaneo en modo clasico/scalper (default: 300s = 5 min)")
     parser.add_argument("--adaptive-ai", action="store_true", help="Activar motor adaptativo multi-estrategia + SQLite + despertares exactos (sniper wake)")
+    parser.add_argument("--supervised-scalper", action="store_true", help="Activar Modo 3: SUPERVISED_M15_SCALPER (ventana 08:00-23:00 hora local, perfiles por simbolo)")
+    parser.add_argument(
+        "--strategy-mode",
+        type=str,
+        choices=list(VALID_STRATEGY_MODES),
+        default=None,
+        help="Seleccion explicita de estrategia: CLASSIC | ADAPTIVE | SUPERVISED_M15_SCALPER (default: env MT5_STRATEGY_MODE)",
+    )
     parser.add_argument("--base-interval-minutes", type=int, default=30, help="Cadencia base en minutos para patrullaje en modo --adaptive-ai (default: 30)")
     parser.add_argument("--seed-history", action="store_true", help="Sembrar strategy_priors (estudio historico 2 anos) en SQLite si la tabla esta vacia")
     parser.add_argument("--learning-db", type=str, default="data/mt5_learning.db", help="Ruta a la base SQLite de aprendizaje (default: data/mt5_learning.db)")
     parser.add_argument("--dry-run", action="store_true", help="Modo simulacion sin enviar ordenes reales")
     args = parser.parse_args()
+
+    resolved_strategy_mode = args.strategy_mode
+    if args.supervised_scalper:
+        resolved_strategy_mode = STRATEGY_MODE_SUPERVISED_M15
 
     Path("logs").mkdir(exist_ok=True)
     logging.basicConfig(
@@ -3339,6 +3886,7 @@ def main() -> int:
         adaptive_ai=args.adaptive_ai,
         base_interval_minutes=args.base_interval_minutes,
         learning_db_path=args.learning_db,
+        strategy_mode=resolved_strategy_mode,
     )
 
     if args.seed_history:

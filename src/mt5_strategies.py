@@ -8,6 +8,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from src.market_scanner import detect_candle_pattern
+from src.mt5_scalper_profiles import SymbolScalperProfile, get_scalper_profile
 
 # Canonical market regimes
 REGIME_TREND_UP = "TREND_UP"
@@ -1308,12 +1309,282 @@ class MomentumADXContinuationStrategy(BaseMT5Strategy):
         return _none_signal(symbol, self.name, regime)
 
 
+class SupervisedM15ScalperStrategy(BaseMT5Strategy):
+    """Strategy 6: Supervised M15 Trend-Aligned Pullback Scalper customized per symbol.
+
+    Captures the high-frequency M15_SCALPER_PULLBACK edge (EMA9/21/50 + EMA200 trend filter,
+    Stochastic turn, RSI band, optional candle pattern confirmation, and spread-to-SL guard),
+    while strictly rejecting contra-trend traps by default (`allow_counter_trend=False`).
+    """
+
+    name = "SUPERVISED_M15_SCALPER"
+    allowed_regimes = (REGIME_TREND_UP, REGIME_TREND_DOWN, REGIME_RANGE)
+
+    _BULL_PATTERNS = ("BULLISH_HAMMER", "BULLISH_ENGULFING", "MORNING_STAR")
+    _BEAR_PATTERNS = ("BEARISH_SHOOTING_STAR", "BEARISH_ENGULFING")
+
+    def evaluate_at(
+        self,
+        symbol: str,
+        ind: IndicatorArrays,
+        idx: int,
+        regime_snap: RegimeSnapshot,
+        digits: int = 5,
+        point: float = 1e-5,
+        spread_points: float | None = None,
+        profile_override: SymbolScalperProfile | None = None,
+    ) -> StrategySignal:
+        if idx < 0:
+            idx = ind.n + idx
+        regime = regime_snap.regime
+        if idx < 60 or idx >= ind.n or regime not in self.allowed_regimes:
+            return _none_signal(symbol, self.name, regime)
+
+        profile = profile_override or get_scalper_profile(symbol)
+
+        close = float(ind.closes[idx])
+        open_px = float(ind.opens[idx])
+        high = float(ind.highs[idx])
+        low = float(ind.lows[idx])
+        atr = max(float(ind.atr_14[idx]), point * 20.0)
+        adx = float(ind.adx_14[idx])
+        if adx < profile.min_adx or adx > profile.max_adx:
+            return _none_signal(symbol, self.name, regime)
+
+        # Exhaustion bar guard (prevents chasing blown-out M15 candles)
+        if abs(close - open_px) > profile.max_body_atr * atr:
+            return _none_signal(symbol, self.name, regime)
+
+        e9 = float(ind.ema_9[idx])
+        e21 = float(ind.ema_21[idx])
+        e50 = float(ind.ema_50[idx])
+        e200 = float(ind.ema_200[idx])
+        rsi = float(ind.rsi_14[idx])
+        k = float(ind.stoch_k[idx])
+        d = float(ind.stoch_d[idx])
+        prev_k = float(ind.stoch_k[idx - 1])
+        k_min3 = float(np.min(ind.stoch_k[max(0, idx - 2) : idx + 1]))
+        k_max3 = float(np.max(ind.stoch_k[max(0, idx - 2) : idx + 1]))
+        macd_improving = float(ind.macd_hist[idx]) >= float(ind.macd_hist[idx - 1])
+        macd_weakening = float(ind.macd_hist[idx]) <= float(ind.macd_hist[idx - 1])
+        pat = _detect_pattern_at(ind, idx, min_range=0.30 * atr)
+
+        sl_dist = max(profile.sl_atr_mult * atr, point * 30.0)
+        if spread_points is not None and spread_points > 0.0:
+            spread_price = float(spread_points) * float(point)
+            if (spread_price / sl_dist) > profile.max_spread_sl_ratio:
+                return _none_signal(symbol, self.name, regime)
+
+        tp_dist = max(profile.tp_atr_mult * atr, sl_dist * profile.min_rr)
+        rr = round(tp_dist / sl_dist, 2)
+
+        def _base_metadata(side_extra: dict[str, Any]) -> dict[str, Any]:
+            meta = {
+                "profile_tier": profile.tier,
+                "asset_class": profile.asset_class,
+                "risk_multiplier": profile.risk_multiplier,
+                "be_trigger_atr": profile.be_trigger_atr,
+                "be_lock_atr": profile.be_lock_atr,
+                "trailing_lock_pct": profile.trailing_lock_pct,
+                "sl_atr_mult": profile.sl_atr_mult,
+                "tp_atr_mult": profile.tp_atr_mult,
+                "pattern": pat,
+                "stoch_k": round(k, 1),
+                "rsi": round(rsi, 1),
+                "adx": round(adx, 1),
+                "atr": round(atr, max(digits, 5)),
+            }
+            meta.update(side_extra)
+            return meta
+
+        # --- LONG (BUY) M15 trend-aligned pullback ---
+        bull_trend_ok = (
+            (regime != REGIME_TREND_DOWN)
+            and (close > e200)
+            and (e9 > e21 > e50)
+            and (close >= e21 - 0.25 * atr)
+        )
+        if bull_trend_ok or (profile.allow_counter_trend and close > open_px and rsi <= 32.0 and k <= 25.0):
+            pulled_back = (
+                (not bull_trend_ok)
+                or (min(low, float(ind.lows[idx - 1])) <= e9 + profile.ema_pullback_tol_atr * atr)
+            )
+            turning_up = (k > prev_k) or (k >= d)
+            stoch_ok = (k <= profile.stoch_long_max) and (k_min3 <= profile.stoch_long_max) and turning_up
+            rsi_ok = (not bull_trend_ok) or (profile.rsi_long_min <= rsi <= profile.rsi_long_max)
+            if profile.require_candle_pattern:
+                trigger_ok = pat in self._BULL_PATTERNS
+            else:
+                trigger_ok = (pat in self._BULL_PATTERNS) or (close > open_px)
+
+            if pulled_back and stoch_ok and rsi_ok and trigger_ok:
+                sl = _round_px(close - sl_dist, digits)
+                tp = _round_px(close + tp_dist, digits)
+                score = 70.0
+                if pat in self._BULL_PATTERNS:
+                    score += 9.0
+                if macd_improving:
+                    score += 6.0
+                if profile.tier == "LEADER":
+                    score += 5.0
+                if 20.0 <= adx <= 38.0:
+                    score += 5.0
+                if k_min3 <= 35.0:
+                    score += 3.0
+                return StrategySignal(
+                    symbol=symbol,
+                    strategy_name=self.name,
+                    direction="BUY",
+                    score=round(min(98.0, score), 1),
+                    entry_price=_round_px(close, digits),
+                    sl_price=sl,
+                    tp_price=tp,
+                    rr_ratio=rr,
+                    regime=regime,
+                    setup_stage="READY",
+                    forming_hint="",
+                    invalidation_level=sl,
+                    metadata=_base_metadata({"entry_pillar": "M15_SCALPER_PULLBACK_LONG"}),
+                )
+
+            if (
+                bull_trend_ok
+                and pulled_back
+                and (k <= profile.stoch_long_max + 6.0)
+                and ((profile.rsi_long_min - 4.0) <= rsi <= profile.rsi_long_max)
+            ):
+                inv = _round_px(close - sl_dist, digits)
+                return StrategySignal(
+                    symbol=symbol,
+                    strategy_name=self.name,
+                    direction="BUY",
+                    score=56.0,
+                    entry_price=_round_px(close, digits),
+                    sl_price=inv,
+                    tp_price=_round_px(close + tp_dist, digits),
+                    rr_ratio=rr,
+                    regime=regime,
+                    setup_stage="FORMING",
+                    forming_hint=(
+                        f"M15 LONG pullback near EMA9/21 (Stoch {k:.1f}, RSI {rsi:.1f}); "
+                        "wait for bullish trigger close"
+                    ),
+                    invalidation_level=inv,
+                    metadata=_base_metadata({"entry_pillar": "M15_SCALPER_PULLBACK_LONG"}),
+                )
+
+        # --- SHORT (SELL) M15 trend-aligned pullback ---
+        bear_trend_ok = (
+            (regime != REGIME_TREND_UP)
+            and (close < e200)
+            and (e9 < e21 < e50)
+            and (close <= e21 + 0.25 * atr)
+        )
+        if bear_trend_ok or (profile.allow_counter_trend and close < open_px and rsi >= 68.0 and k >= 75.0):
+            pulled_back = (
+                (not bear_trend_ok)
+                or (max(high, float(ind.highs[idx - 1])) >= e9 - profile.ema_pullback_tol_atr * atr)
+            )
+            turning_down = (k < prev_k) or (k <= d)
+            stoch_ok = (k >= profile.stoch_short_min) and (k_max3 >= profile.stoch_short_min) and turning_down
+            rsi_ok = (not bear_trend_ok) or (profile.rsi_short_min <= rsi <= profile.rsi_short_max)
+            if profile.require_candle_pattern:
+                trigger_ok = pat in self._BEAR_PATTERNS
+            else:
+                trigger_ok = (pat in self._BEAR_PATTERNS) or (close < open_px)
+
+            if pulled_back and stoch_ok and rsi_ok and trigger_ok:
+                sl = _round_px(close + sl_dist, digits)
+                tp = _round_px(close - tp_dist, digits)
+                score = 72.0  # Slight priority for SHORT pullbacks (PF 9.70 live edge)
+                if pat in self._BEAR_PATTERNS:
+                    score += 9.0
+                if macd_weakening:
+                    score += 6.0
+                if profile.tier == "LEADER":
+                    score += 5.0
+                if 20.0 <= adx <= 38.0:
+                    score += 4.0
+                if k_max3 >= 65.0:
+                    score += 2.0
+                return StrategySignal(
+                    symbol=symbol,
+                    strategy_name=self.name,
+                    direction="SELL",
+                    score=round(min(98.0, score), 1),
+                    entry_price=_round_px(close, digits),
+                    sl_price=sl,
+                    tp_price=tp,
+                    rr_ratio=rr,
+                    regime=regime,
+                    setup_stage="READY",
+                    forming_hint="",
+                    invalidation_level=sl,
+                    metadata=_base_metadata({"entry_pillar": "M15_SCALPER_PULLBACK_SHORT"}),
+                )
+
+            if (
+                bear_trend_ok
+                and pulled_back
+                and (k >= profile.stoch_short_min - 6.0)
+                and (profile.rsi_short_min <= rsi <= (profile.rsi_short_max + 4.0))
+            ):
+                inv = _round_px(close + sl_dist, digits)
+                return StrategySignal(
+                    symbol=symbol,
+                    strategy_name=self.name,
+                    direction="SELL",
+                    score=56.0,
+                    entry_price=_round_px(close, digits),
+                    sl_price=inv,
+                    tp_price=_round_px(close - tp_dist, digits),
+                    rr_ratio=rr,
+                    regime=regime,
+                    setup_stage="FORMING",
+                    forming_hint=(
+                        f"M15 SHORT pullback near EMA9/21 (Stoch {k:.1f}, RSI {rsi:.1f}); "
+                        "wait for bearish trigger close"
+                    ),
+                    invalidation_level=inv,
+                    metadata=_base_metadata({"entry_pillar": "M15_SCALPER_PULLBACK_SHORT"}),
+                )
+
+        return _none_signal(symbol, self.name, regime)
+
+    def evaluate_candles(
+        self,
+        symbol: str,
+        candles: Sequence[dict[str, Any]],
+        digits: int = 5,
+        point: float = 1e-5,
+        spread_points: float | None = None,
+        regime_classifier: MarketRegimeClassifier | None = None,
+        profile_override: SymbolScalperProfile | None = None,
+    ) -> tuple[RegimeSnapshot, StrategySignal]:
+        """Evaluate closed M15 candles directly and return (RegimeSnapshot, StrategySignal)."""
+        ind = compute_indicators(candles)
+        clf = regime_classifier or MarketRegimeClassifier()
+        regime_snap = clf.classify_at(ind, -1)
+        sig = self.evaluate_at(
+            symbol=symbol,
+            ind=ind,
+            idx=ind.n - 1,
+            regime_snap=regime_snap,
+            digits=digits,
+            point=point,
+            spread_points=spread_points,
+            profile_override=profile_override,
+        )
+        return regime_snap, sig
+
+
 DEFAULT_STRATEGIES: tuple[BaseMT5Strategy, ...] = (
     TrendPullbackEMAStochStrategy(),
     VolatilitySqueezeBreakoutStrategy(),
     MeanReversionBBRSIStrategy(),
     StructureSwingSRRejectionStrategy(),
     MomentumADXContinuationStrategy(),
+    SupervisedM15ScalperStrategy(),
 )
 
 

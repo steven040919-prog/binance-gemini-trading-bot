@@ -59,3 +59,4 @@ Cada vez que se realicen cambios en el código del bot:
 - **v1.0.0 (2026-11-21):** Respaldo inicial completo del bot MT5 Exness + agente Gemini (`3ef6ef4`).
 - **v1.0.1 (2026-11-22):** Agregado `VPS_SETUP_CONTEXT.md` con contexto del proyecto, guía de instalación en VPS y política de respaldos.
 - **v1.0.2 (2026-11-22):** Configurado arranque exclusivo en Modo Adaptativo (`--adaptive-ai --seed-history`) e incluidos los últimos cambios y `tests/test_mt5_adaptive_bot.py`.
+- **v1.0.3 (2026-11-23):** Agregada tercera estrategia `SUPERVISED_M15_SCALPER` (`src/mt5_scalper_profiles.py`, `src/mt5_strategies.py`, `src/mt5_bot.py`) con perfiles personalizados para los 14 activos, ventana horaria estricta 08:00-23:00 hora local (UTC-6) para nuevas entradas con gestión 24/7 de posiciones abiertas, lanzador `start_mt5_scalper.bat` y 16 pruebas en `tests/test_mt5_supervised_scalper.py`.
